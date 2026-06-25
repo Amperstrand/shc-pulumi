@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shc-pulumi"
+version = "0.1.0"
+description = "Pulumi dynamic provider for Sovereign Hybrid Compute (SHC) VPS"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "pulumi>=3.0",
+    "shc-toolkit",
+]
+
+[project.urls]
+Homepage = "https://github.com/Amperstrand/shc-pulumi"
+SHC_API = "https://blesta.sovereignhybridcompute.com/user-api/docs/"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+shc_pulumi = ["py.typed"]

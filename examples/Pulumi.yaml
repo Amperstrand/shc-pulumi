@@ -1,0 +1,9 @@
+name: shc-test
+description: SHC VPS via Pulumi
+runtime:
+  name: python
+  options:
+    virtualenv: venv2
+config:
+  shc_api_key:
+    secret: true

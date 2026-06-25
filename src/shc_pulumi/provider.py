@@ -1,0 +1,234 @@
+"""Pulumi dynamic resource provider for SHC VPS instances."""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Optional
+
+import pulumi
+from pulumi.dynamic import (
+    CreateResult,
+    DiffResult,
+    ReadResult,
+    ResourceProvider,
+)
+from shc_toolkit import SHCClient
+from shc_toolkit.client import SHCError
+
+_PROVISIONING_TIMEOUT = 300
+_PROVISIONING_INTERVAL = 5
+
+_REPLACE_PROPS = frozenset({"hostname", "package_id", "pricing_id"})
+_STABLE_PROPS = frozenset({"ip", "service_id", "os_user", "status"})
+
+
+class SHCVMProvider(ResourceProvider):
+    """Dynamic resource provider managing SHC VM lifecycle.
+
+    The ``api_key`` may be a plain string or a Pulumi secret Output.
+    When passed as an Output, the provider cannot build the client at
+    construction time (Outputs are not yet resolved); instead it
+    defers until ``create``/``read``/``delete`` receive the resolved
+    value via ``props``.
+    """
+
+    def __init__(self, api_key: str = ""):
+        super().__init__()
+        self.api_key = api_key
+        self.client: SHCClient | None = (
+            SHCClient(api_key=api_key) if api_key else None
+        )
+
+    def _get_client(self, props: dict[str, Any]) -> SHCClient:
+        if self.client is not None:
+            return self.client
+        key = props.get("api_key", "")
+        if not key or not isinstance(key, str):
+            import os
+            key = os.environ.get("SHC_API_KEY", "")
+        if not key:
+            raise ValueError(
+                "api_key required: pass as a resource argument or export SHC_API_KEY"
+            )
+        self.client = SHCClient(api_key=key)
+        return self.client
+
+    # ── CRUD ─────────────────────────────────────────────────
+
+    def create(self, props: dict[str, Any]) -> CreateResult:
+        client = self._get_client(props)
+        hostname = props["hostname"]
+        package_id = props["package_id"]
+        pricing_id = props["pricing_id"]
+
+        result = client.submit_order(
+            hostname=hostname,
+            package_id=package_id,
+            pricing_id=pricing_id,
+        )
+
+        service_ids = result.get("service_ids", [])
+        service_id = (
+            service_ids[0]
+            if service_ids
+            else result.get("service_id") or result.get("id")
+        )
+        if not service_id:
+            raise RuntimeError(f"Order response missing service_id: {result}")
+        sid = int(service_id)
+
+        vm = self._wait_for_ready(client, sid)
+
+        ssh_key = props.get("ssh_key")
+        if ssh_key:
+            for _ in range(3):
+                try:
+                    client.apply_ssh_key_live(sid, ssh_key)
+                    break
+                except Exception:
+                    time.sleep(5)
+
+        if props.get("auto_cancel"):
+            try:
+                client.cancel_vm(sid, immediate=False)
+            except (SHCError, Exception):
+                pass
+
+        for attempt in range(5):
+            try:
+                vm = client.get_vm(sid)
+                break
+            except Exception:
+                time.sleep(3)
+        else:
+            vm = {"ips": [], "os_user": "debian"}
+
+        ips = vm.get("ips", [])
+        ip = ips[0]["ip"] if ips else ""
+        os_user = vm.get("os_user", "debian")
+
+        outs = {
+            "ip": ip,
+            "hostname": hostname,
+            "service_id": sid,
+            "os_user": os_user,
+            "status": vm.get("provisioning_state", "ready"),
+            "package_id": package_id,
+            "pricing_id": pricing_id,
+        }
+        return CreateResult(id_=str(sid), outs=outs)
+
+    def read(self, id: str, props: dict[str, Any]) -> ReadResult:
+        client = self._get_client(props)
+        try:
+            vm = client.get_vm(int(id))
+        except SHCError:
+            return ReadResult(id_="", outs=None)
+
+        ips = vm.get("ips", [])
+        outs = {
+            "ip": ips[0]["ip"] if ips else "",
+            "hostname": vm.get("hostname", props.get("hostname", "")),
+            "service_id": int(id),
+            "os_user": vm.get("os_user", "debian"),
+            "status": vm.get("provisioning_state", "unknown"),
+            "package_id": props.get("package_id"),
+            "pricing_id": props.get("pricing_id"),
+        }
+        return ReadResult(id_=id, outs=outs)
+
+    def delete(self, id: str, props: dict[str, Any]) -> None:
+        client = self._get_client(props)
+        try:
+            client.cancel_vm(int(id), immediate=True)
+        except SHCError as e:
+            if "not_found" in e.code or "already" in e.message.lower():
+                return
+            raise
+
+    def diff(
+        self,
+        id: str,
+        olds: dict[str, Any],
+        news: dict[str, Any],
+    ) -> DiffResult:
+        replaces: list[str] = []
+        for prop in _REPLACE_PROPS:
+            if olds.get(prop) != news.get(prop):
+                replaces.append(prop)
+        if replaces:
+            return DiffResult(changes=True, replaces=replaces, stables=list(_STABLE_PROPS))
+        return DiffResult(changes=False, stables=list(_STABLE_PROPS))
+
+    # ── Helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _wait_for_ready(client: SHCClient, sid: int) -> dict[str, Any]:
+        deadline = time.time() + _PROVISIONING_TIMEOUT
+        while time.time() < deadline:
+            try:
+                vm = client.get_vm(sid)
+                prov = vm.get("provisioning_state", "unknown")
+                if prov == "ready":
+                    return vm
+                if prov in ("failed", "error"):
+                    raise RuntimeError(f"VM {sid} provisioning failed: {vm}")
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+            time.sleep(_PROVISIONING_INTERVAL)
+        raise TimeoutError(
+            f"VM {sid} not ready after {_PROVISIONING_TIMEOUT}s"
+        )
+
+
+class SHCVMResource(pulumi.dynamic.Resource):
+    """Pulumi resource representing an SHC VPS instance.
+
+    Example::
+
+        vm = SHCVMResource("my-vm",
+            hostname="test-vm",
+            package_id=81,
+            pricing_id=245,
+            api_key=pulumi.Config().require_secret("shc_api_key"),
+            ssh_key=open("~/.ssh/id_rsa.pub").read().strip(),
+            auto_cancel=True,
+        )
+        pulumi.export("ip", vm.ip)
+        pulumi.export("service_id", vm.service_id)
+    """
+
+    ip: pulumi.Output[str]
+    hostname: pulumi.Output[str]
+    service_id: pulumi.Output[int]
+    os_user: pulumi.Output[str]
+    status: pulumi.Output[str]
+
+    def __init__(
+        self,
+        name: str,
+        hostname: pulumi.Input[str],
+        package_id: pulumi.Input[int],
+        pricing_id: pulumi.Input[int],
+        api_key: pulumi.Input[str],
+        ssh_key: Optional[pulumi.Input[str]] = None,
+        auto_cancel: bool = True,
+        opts: Optional[pulumi.ResourceOptions] = None,
+    ):
+        provider = SHCVMProvider()
+        props: dict[str, Any] = {
+            "hostname": hostname,
+            "package_id": package_id,
+            "pricing_id": pricing_id,
+            "api_key": pulumi.Output.secret(api_key) if api_key else "",
+            "ip": None,
+            "service_id": None,
+            "os_user": None,
+            "status": None,
+        }
+        if ssh_key is not None:
+            props["ssh_key"] = ssh_key
+        props["auto_cancel"] = auto_cancel
+        super().__init__(provider, name, props, opts)
