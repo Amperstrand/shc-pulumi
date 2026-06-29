@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install shc-toolkit from git
+        run: pip install git+https://github.com/Amperstrand/shc-toolkit.git
+
+      - name: Install shc-pulumi (editable) + pytest
+        run: |
+          pip install -e .
+          pip install pytest
+
+      - name: Run unit tests
+        run: python3 -m pytest tests/ -v
+
+  import-test:
+    name: Import test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install shc-toolkit (dependency)
+        run: pip install git+https://github.com/Amperstrand/shc-toolkit.git
+
+      - name: Install shc-pulumi (editable)
+        run: pip install -e .
+
+      - name: Ensure Pulumi is available
+        run: pip install pulumi
+
+      - name: Verify import
+        run: python -c "from shc_pulumi import SHCVMResource; print('OK')"
+
+  lint:
+    name: Byte-compile lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile-check source
+        run: python -m py_compile src/shc_pulumi/*.py

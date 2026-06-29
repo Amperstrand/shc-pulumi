@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any, Optional
 
 import pulumi
@@ -14,7 +16,27 @@ from pulumi.dynamic import (
 from shc_toolkit import SHCClient
 from shc_toolkit.client import SHCError
 
+logger = logging.getLogger(__name__)
+
 _REPLACE_PROPS = frozenset({"service_id", "name"})
+
+
+def _raise_on_unsupported_storage(e: SHCError, operation: str) -> None:
+    """Re-raise with a clear message if the plan lacks storage features.
+
+    Dev VPS plans (pkg 80-84) do not include snapshot/backup support.
+    The SHC API returns an ``upstream_failure`` or storage-related error
+    code in that case.  This helper translates the opaque API error into
+    an actionable message.
+    """
+    code = (e.code or "").lower()
+    msg = (e.message or "").lower()
+    if "upstream_failure" in code or "storage" in code or "storage" in msg:
+        raise RuntimeError(
+            f"Failed to {operation}: this SHC plan may not support "
+            "snapshots/backups. Dev VPS plans (pkg 80-84) do not include "
+            f"storage features. Original error: {e}"
+        ) from e
 
 
 class SHCSnapshotProvider(ResourceProvider):
@@ -31,8 +53,12 @@ class SHCSnapshotProvider(ResourceProvider):
         if self.client is not None:
             return self.client
         key = props.get("api_key", "")
+        if not key or not isinstance(key, str):
+            key = os.environ.get("SHC_API_KEY", "")
         if not key:
-            raise ValueError("api_key required for SHCSnapshotResource")
+            raise ValueError(
+                "api_key required: pass as a resource argument or export SHC_API_KEY"
+            )
         self.client = SHCClient(api_key=key)
         return self.client
 
@@ -41,7 +67,12 @@ class SHCSnapshotProvider(ResourceProvider):
         service_id = int(props["service_id"])
         name = props.get("name")
 
-        result = client.create_snapshot(service_id, name=name)
+        try:
+            result = client.create_snapshot(service_id, name=name)
+        except SHCError as e:
+            _raise_on_unsupported_storage(e, "create snapshot")
+            raise
+
         snapshot_id = result.get("snapshot_id") or result.get("id", "")
 
         return CreateResult(
@@ -53,19 +84,20 @@ class SHCSnapshotProvider(ResourceProvider):
             },
         )
 
-    def read(self, id: str, props: dict[str, Any]) -> ReadResult:
+    def read(self, id_: str, props: dict[str, Any]) -> ReadResult:
         client = self._get_client(props)
         service_id = int(props["service_id"])
         try:
             snapshots = client.list_snapshots(service_id)
-        except SHCError:
+        except SHCError as e:
+            _raise_on_unsupported_storage(e, "list snapshots")
             return ReadResult(id_="", outs=None)
 
         for snap in snapshots:
             sid = snap.get("snapshot_id") or snap.get("id", "")
-            if str(sid) == id:
+            if str(sid) == id_:
                 return ReadResult(
-                    id_=id,
+                    id_=id_,
                     outs={
                         "snapshot_id": str(sid),
                         "service_id": service_id,
@@ -74,19 +106,20 @@ class SHCSnapshotProvider(ResourceProvider):
                 )
         return ReadResult(id_="", outs=None)
 
-    def delete(self, id: str, props: dict[str, Any]) -> None:
+    def delete(self, id_: str, props: dict[str, Any]) -> None:
         client = self._get_client(props)
         service_id = int(props["service_id"])
         try:
-            client.delete_snapshot(service_id, id)
+            client.delete_snapshot(service_id, id_)
         except SHCError as e:
             if "not_found" in e.code:
                 return
+            _raise_on_unsupported_storage(e, "delete snapshot")
             raise
 
     def diff(
         self,
-        id: str,
+        id_: str,
         olds: dict[str, Any],
         news: dict[str, Any],
     ) -> DiffResult:

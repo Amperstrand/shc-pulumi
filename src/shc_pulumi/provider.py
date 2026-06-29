@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -15,10 +17,17 @@ from pulumi.dynamic import (
 from shc_toolkit import SHCClient
 from shc_toolkit.client import SHCError
 
+logger = logging.getLogger(__name__)
+
 _PROVISIONING_TIMEOUT = 300
 _PROVISIONING_INTERVAL = 5
 
-_REPLACE_PROPS = frozenset({"hostname", "package_id", "pricing_id"})
+# Changes to these props force a full replacement (delete + recreate).
+_REPLACE_PROPS = frozenset({"hostname", "package_id", "pricing_id", "ssh_key"})
+# Changes to these props are detected and reported as updates but do NOT
+# force replacement of the underlying VM.
+_UPDATE_PROPS = frozenset({"auto_cancel", "api_key"})
+# Output-only props that never trigger a diff.
 _STABLE_PROPS = frozenset({"ip", "service_id", "os_user", "status"})
 
 
@@ -44,7 +53,6 @@ class SHCVMProvider(ResourceProvider):
             return self.client
         key = props.get("api_key", "")
         if not key or not isinstance(key, str):
-            import os
             key = os.environ.get("SHC_API_KEY", "")
         if not key:
             raise ValueError(
@@ -53,7 +61,7 @@ class SHCVMProvider(ResourceProvider):
         self.client = SHCClient(api_key=key)
         return self.client
 
-    # ── CRUD ─────────────────────────────────────────────────
+    # -- CRUD ---------------------------------------------------
 
     def create(self, props: dict[str, Any]) -> CreateResult:
         client = self._get_client(props)
@@ -81,18 +89,35 @@ class SHCVMProvider(ResourceProvider):
 
         ssh_key = props.get("ssh_key")
         if ssh_key:
-            for _ in range(3):
+            last_err: Exception | None = None
+            for attempt in range(3):
                 try:
                     client.apply_ssh_key_live(sid, ssh_key)
+                    last_err = None
                     break
-                except Exception:
+                except Exception as exc:
+                    last_err = exc
+                    logger.warning(
+                        "SSH key apply attempt %d/3 for VM %s failed: %s",
+                        attempt + 1,
+                        sid,
+                        exc,
+                    )
                     time.sleep(5)
+            if last_err is not None:
+                raise RuntimeError(
+                    f"Failed to apply SSH key to VM {sid} after 3 retries"
+                ) from last_err
 
         if props.get("auto_cancel"):
             try:
                 client.cancel_vm(sid, immediate=False)
-            except (SHCError, Exception):
-                pass
+            except (SHCError, Exception) as exc:
+                logger.warning(
+                    "auto_cancel failed for VM %s (VM was created successfully): %s",
+                    sid,
+                    exc,
+                )
 
         for attempt in range(5):
             try:
@@ -118,10 +143,10 @@ class SHCVMProvider(ResourceProvider):
         }
         return CreateResult(id_=str(sid), outs=outs)
 
-    def read(self, id: str, props: dict[str, Any]) -> ReadResult:
+    def read(self, id_: str, props: dict[str, Any]) -> ReadResult:
         client = self._get_client(props)
         try:
-            vm = client.get_vm(int(id))
+            vm = client.get_vm(int(id_))
         except SHCError:
             return ReadResult(id_="", outs=None)
 
@@ -129,18 +154,18 @@ class SHCVMProvider(ResourceProvider):
         outs = {
             "ip": ips[0]["ip"] if ips else "",
             "hostname": vm.get("hostname", props.get("hostname", "")),
-            "service_id": int(id),
+            "service_id": int(id_),
             "os_user": vm.get("os_user", "debian"),
             "status": vm.get("provisioning_state", "unknown"),
             "package_id": props.get("package_id"),
             "pricing_id": props.get("pricing_id"),
         }
-        return ReadResult(id_=id, outs=outs)
+        return ReadResult(id_=id_, outs=outs)
 
-    def delete(self, id: str, props: dict[str, Any]) -> None:
+    def delete(self, id_: str, props: dict[str, Any]) -> None:
         client = self._get_client(props)
         try:
-            client.cancel_vm(int(id), immediate=True)
+            client.cancel_vm(int(id_), immediate=True)
         except SHCError as e:
             if "not_found" in e.code or "already" in e.message.lower():
                 return
@@ -148,7 +173,7 @@ class SHCVMProvider(ResourceProvider):
 
     def diff(
         self,
-        id: str,
+        id_: str,
         olds: dict[str, Any],
         news: dict[str, Any],
     ) -> DiffResult:
@@ -156,11 +181,25 @@ class SHCVMProvider(ResourceProvider):
         for prop in _REPLACE_PROPS:
             if olds.get(prop) != news.get(prop):
                 replaces.append(prop)
+
+        # Detect changes to update-only props (auto_cancel, api_key).
+        # These don't force replacement but should be reported so the
+        # new values are saved in state.
+        has_updates = any(
+            olds.get(prop) != news.get(prop) for prop in _UPDATE_PROPS
+        )
+
         if replaces:
-            return DiffResult(changes=True, replaces=replaces, stables=list(_STABLE_PROPS))
+            return DiffResult(
+                changes=True,
+                replaces=replaces,
+                stables=list(_STABLE_PROPS),
+            )
+        if has_updates:
+            return DiffResult(changes=True, stables=list(_STABLE_PROPS))
         return DiffResult(changes=False, stables=list(_STABLE_PROPS))
 
-    # ── Helpers ──────────────────────────────────────────────
+    # -- Helpers ------------------------------------------------
 
     @staticmethod
     def _wait_for_ready(client: SHCClient, sid: int) -> dict[str, Any]:
@@ -175,8 +214,10 @@ class SHCVMProvider(ResourceProvider):
                     raise RuntimeError(f"VM {sid} provisioning failed: {vm}")
             except RuntimeError:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "Transient error while waiting for VM %s: %s", sid, exc
+                )
             time.sleep(_PROVISIONING_INTERVAL)
         raise TimeoutError(
             f"VM {sid} not ready after {_PROVISIONING_TIMEOUT}s"

@@ -1,0 +1,142 @@
+name: Integration
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'yes' to run -- this provisions and cancels a real VM"
+        required: true
+        default: "yes"
+
+jobs:
+  integration:
+    name: Provider VM lifecycle (create + cancel)
+    runs-on: ubuntu-latest
+    env:
+      SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
+      # NVMe Starter (pkg 23, pricing 55) -- cheapest plan that supports
+      # snapshots. ~$0.26/day with prorated refund on immediate cancel.
+      SHC_PKG_ID: "23"
+      SHC_PRICING_ID: "55"
+    steps:
+      - name: Abort without API key
+        run: |
+          if [ -z "$SHC_API_KEY" ]; then
+            echo "::error::SHC_API_KEY secret is required"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install git+https://github.com/Amperstrand/shc-toolkit.git
+          pip install -e .
+
+      - name: Run provider lifecycle test
+        id: lifecycle
+        run: |
+          python3 << 'PYEOF'
+          import os, time, json, requests
+          from shc_pulumi.provider import SHCVMProvider
+
+          api_key = os.environ["SHC_API_KEY"]
+          base = "https://blesta.sovereignhybridcompute.com/user-api/v2"
+
+          def get_balance():
+              r = requests.get(f"{base}/billing/balance",
+                  headers={"Authorization": f"Bearer {api_key}"}, timeout=15)
+              t = r.text
+              i = t.find("{")
+              if i > 0: t = t[i:]
+              d = json.loads(t).get("data", {})
+              for b in d.get("balances", []):
+                  if b.get("currency") == "USD":
+                      return float(b["available_credit"])
+              return 0.0
+
+          before = get_balance()
+          hostname = f"ci-pulumi-{int(time.time())}"
+          pkg_id = int(os.environ["SHC_PKG_ID"])
+          pricing_id = int(os.environ["SHC_PRICING_ID"])
+          print(f"[1/4] Creating VM '{hostname}' (pkg {pkg_id}, pricing {pricing_id})...")
+          p = SHCVMProvider()
+          result = p.create({"hostname": hostname, "package_id": pkg_id,
+              "pricing_id": pricing_id, "api_key": api_key, "auto_cancel": False})
+          sid = result.id
+          # Persist the service id + api key + base url for the always-cancel step.
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"SHC_CREATED_SID={sid}\n")
+              f.write(f"SHC_HOSTNAME={hostname}\n")
+          outs = result.outs
+          print(f"  OK: id={sid} ip={outs.get('ip','')} status={outs.get('status','')}")
+
+          print("[2/4] Reading VM...")
+          r = p.read(sid, outs)
+          print(f"  OK: ip={r.outs.get('ip','')} status={r.outs.get('status','')}")
+
+          print("[3/4] Diff (no changes)...")
+          d = p.diff(sid, outs, {**outs, "api_key": api_key})
+          print(f"  changes={d.changes}")
+
+          print("[4/4] Canceling VM...")
+          p.delete(sid, outs)
+          print("  OK: canceled")
+
+          time.sleep(5)
+          after = get_balance()
+          cost = before - after
+          print(f"\nCI run cost: ${cost:.2f} (balance delta only, total hidden)")
+          if cost > 1.0:
+              print("WARNING: cost above $1 -- check for leftover VMs")
+          PYEOF
+
+      - name: Always cancel VM (even on failure)
+        if: always() && env.SHC_CREATED_SID != ''
+        run: |
+          python3 << 'PYEOF'
+          import os, requests
+          api_key = os.environ.get("SHC_API_KEY", "")
+          base = "https://blesta.sovereignhybridcompute.com/user-api/v2"
+          sid = os.environ.get("SHC_CREATED_SID", "")
+          if not sid:
+              print("No VM was created; nothing to cancel.")
+              raise SystemExit(0)
+          h = {"Authorization": f"Bearer {api_key}"}
+          print(f"Always-cancel: canceling VM {sid} (hostname={os.environ.get('SHC_HOSTNAME','?')})")
+          try:
+              r = requests.post(f"{base}/vm/{sid}/cancel",
+                  headers=h, json={"immediate": True}, timeout=15)
+              print(f"  cancel http={r.status_code}")
+          except Exception as e:
+              print(f"  cancel error (ignored): {e}")
+          PYEOF
+
+      - name: Cleanup leftover ci- VMs on failure
+        if: failure()
+        run: |
+          python3 << 'PYEOF'
+          import os, requests, json
+          api_key = os.environ.get("SHC_API_KEY", "")
+          base = "https://blesta.sovereignhybridcompute.com/user-api/v2"
+          h = {"Authorization": f"Bearer {api_key}"}
+          r = requests.get(f"{base}/vm", headers=h, timeout=15)
+          t = r.text; i = t.find("{")
+          if i > 0: t = t[i:]
+          vms = json.loads(t).get("data",{}).get("items",[])
+          for vm in vms:
+              if "ci-" in vm.get("hostname",""):
+                  sid = vm["id"]
+                  print(f"Cleanup: canceling leftover VM {sid} ({vm['hostname']})")
+                  try:
+                      requests.post(f"{base}/vm/{sid}/cancel",
+                          headers=h, json={"immediate": True}, timeout=15)
+                  except: pass
+          PYEOF

@@ -1,0 +1,206 @@
+"""Unit tests for SHCVMProvider and SHCSnapshotProvider.
+
+All SHC API calls are mocked via the ``mock_client`` fixture defined in
+``conftest.py``.  These tests exercise the provider lifecycle logic
+(create / read / delete / diff) without making any real network calls.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import pytest
+
+from shc_pulumi.provider import SHCVMProvider
+from shc_pulumi.snapshot import SHCSnapshotProvider
+
+
+# ---------------------------------------------------------------------------
+# SHCVMProvider lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_create_vm(mock_client):
+    # Patch SHCClient creation to return mock_client
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.create({
+            "hostname": "test-vm",
+            "package_id": 81,
+            "pricing_id": 245,
+            "api_key": "test",
+            "auto_cancel": False,
+        })
+        assert result.id == "123"
+        assert result.outs["ip"] == "1.2.3.4"
+        assert result.outs["hostname"] == "test-vm"
+
+
+def test_read_vm(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.read("123", {
+            "hostname": "test",
+            "package_id": 81,
+            "pricing_id": 245,
+            "api_key": "test",
+        })
+        assert result.outs["ip"] == "1.2.3.4"
+
+
+def test_delete_vm(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        provider.delete("123", {"hostname": "test", "api_key": "test"})
+        mock_client.cancel_vm.assert_called_once_with(123, immediate=True)
+
+
+def test_diff_replaces_hostname(mock_client):
+    provider = SHCVMProvider(api_key="test")
+    result = provider.diff("123", {"hostname": "old"}, {"hostname": "new"})
+    assert result.changes is True
+    assert "hostname" in result.replaces
+
+
+def test_diff_no_changes(mock_client):
+    provider = SHCVMProvider(api_key="test")
+    result = provider.diff(
+        "123",
+        {"hostname": "x", "package_id": 1, "pricing_id": 2},
+        {"hostname": "x", "package_id": 1, "pricing_id": 2},
+    )
+    assert result.changes is False
+
+
+def test_create_vm_submits_order_with_correct_args(mock_client):
+    """The provider should forward hostname/package/pricing to submit_order."""
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        provider.create({
+            "hostname": "my-vm",
+            "package_id": 81,
+            "pricing_id": 245,
+            "api_key": "test",
+            "auto_cancel": False,
+        })
+        mock_client.submit_order.assert_called_once_with(
+            hostname="my-vm",
+            package_id=81,
+            pricing_id=245,
+        )
+
+
+def test_create_vm_auto_cancel_schedules_non_immediate(mock_client):
+    """When auto_cancel is True, a non-immediate cancel must be scheduled."""
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        provider.create({
+            "hostname": "my-vm",
+            "package_id": 81,
+            "pricing_id": 245,
+            "api_key": "test",
+            "auto_cancel": True,
+        })
+        mock_client.cancel_vm.assert_called_once_with(123, immediate=False)
+
+
+def test_read_vm_returns_empty_when_not_found(mock_client):
+    """A SHCError on get_vm should produce an empty ReadResult (resource gone)."""
+    from shc_toolkit.client import SHCError
+
+    mock_client.get_vm.side_effect = SHCError("not_found", "no such vm")
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.read("999", {"hostname": "x", "api_key": "test"})
+        assert result.id == ""
+        assert result.outs is None
+
+
+def test_diff_replaces_package_id(mock_client):
+    provider = SHCVMProvider(api_key="test")
+    result = provider.diff(
+        "1",
+        {"hostname": "a", "package_id": 1, "pricing_id": 2},
+        {"hostname": "a", "package_id": 2, "pricing_id": 2},
+    )
+    assert result.changes is True
+    assert "package_id" in result.replaces
+
+
+# ---------------------------------------------------------------------------
+# SHCSnapshotProvider lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_create(mock_client):
+    with patch("shc_pulumi.snapshot.SHCClient", return_value=mock_client):
+        provider = SHCSnapshotProvider(api_key="test")
+        result = provider.create({
+            "service_id": 123,
+            "api_key": "test",
+            "name": "test",
+        })
+        assert result.id == "snap-1"
+        assert result.outs["snapshot_id"] == "snap-1"
+        assert result.outs["service_id"] == 123
+        assert result.outs["name"] == "test"
+        mock_client.create_snapshot.assert_called_once_with(123, name="test")
+
+
+def test_snapshot_read(mock_client):
+    with patch("shc_pulumi.snapshot.SHCClient", return_value=mock_client):
+        provider = SHCSnapshotProvider(api_key="test")
+        result = provider.read("snap-1", {
+            "service_id": 123,
+            "api_key": "test",
+            "name": "test",
+        })
+        assert result.id == "snap-1"
+        assert result.outs["snapshot_id"] == "snap-1"
+        assert result.outs["name"] == "test"
+        mock_client.list_snapshots.assert_called_once_with(123)
+
+
+def test_snapshot_read_missing_returns_empty(mock_client):
+    """When the snapshot id is not in list_snapshots, read returns empty."""
+    with patch("shc_pulumi.snapshot.SHCClient", return_value=mock_client):
+        provider = SHCSnapshotProvider(api_key="test")
+        result = provider.read("snap-missing", {
+            "service_id": 123,
+            "api_key": "test",
+            "name": "test",
+        })
+        assert result.id == ""
+        assert result.outs is None
+
+
+def test_snapshot_delete(mock_client):
+    with patch("shc_pulumi.snapshot.SHCClient", return_value=mock_client):
+        provider = SHCSnapshotProvider(api_key="test")
+        provider.delete("snap-1", {
+            "service_id": 123,
+            "api_key": "test",
+            "name": "test",
+        })
+        mock_client.delete_snapshot.assert_called_once_with(123, "snap-1")
+
+
+def test_snapshot_diff_replaces_service_id(mock_client):
+    provider = SHCSnapshotProvider(api_key="test")
+    result = provider.diff(
+        "snap-1",
+        {"service_id": 123, "name": "a"},
+        {"service_id": 456, "name": "a"},
+    )
+    assert result.changes is True
+    assert "service_id" in result.replaces
+
+
+def test_snapshot_diff_no_changes(mock_client):
+    provider = SHCSnapshotProvider(api_key="test")
+    result = provider.diff(
+        "snap-1",
+        {"service_id": 123, "name": "a"},
+        {"service_id": 123, "name": "a"},
+    )
+    assert result.changes is False
