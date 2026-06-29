@@ -18,8 +18,8 @@ jobs:
       SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
       # NVMe Starter (pkg 23, pricing 55) -- cheapest plan that supports
       # snapshots. ~$0.26/day with prorated refund on immediate cancel.
-      SHC_PKG_ID: "23"
-      SHC_PRICING_ID: "55"
+      SHC_PKG_ID: "81"
+      SHC_PRICING_ID: "245"
     steps:
       - name: Abort without API key
         run: |
