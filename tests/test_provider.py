@@ -116,7 +116,7 @@ def test_read_vm_returns_empty_when_not_found(mock_client):
         assert result.outs is None
 
 
-def test_diff_replaces_package_id(mock_client):
+def test_diff_package_id_triggers_update_not_replacement(mock_client):
     provider = SHCVMProvider(api_key="test")
     result = provider.diff(
         "1",
@@ -124,7 +124,7 @@ def test_diff_replaces_package_id(mock_client):
         {"hostname": "a", "package_id": 2, "pricing_id": 2},
     )
     assert result.changes is True
-    assert "package_id" in result.replaces
+    assert "package_id" not in result.replaces
 
 
 # ---------------------------------------------------------------------------
@@ -279,3 +279,65 @@ def test_update_power_state(mock_client):
         )
     mock_client.start_vm.assert_called_once_with(123)
     assert result.outs["power_state"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# SHCVMProvider in-place upgrade
+# ---------------------------------------------------------------------------
+
+
+def test_update_triggers_upgrade_when_pricing_changes(mock_client):
+    """Changing pricing_id must call upgrade_vm with the new pricing_ref."""
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        provider.update(
+            "123",
+            {
+                "hostname": "test",
+                "package_id": 82,
+                "pricing_id": 249,
+                "api_key": "test",
+            },
+            {
+                "hostname": "test",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+            },
+        )
+    mock_client.upgrade_vm.assert_called_once_with(123, pricing_ref=249)
+
+
+def test_update_does_not_upgrade_when_pricing_unchanged(mock_client):
+    """No upgrade call when pricing_id is the same."""
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        provider.update(
+            "123",
+            {
+                "hostname": "test",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+            },
+            {
+                "hostname": "test",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+            },
+        )
+    mock_client.upgrade_vm.assert_not_called()
+
+
+def test_diff_package_id_no_longer_forces_replacement(mock_client):
+    """package_id/pricing_id changes should be updates, not replacements."""
+    provider = SHCVMProvider(api_key="test")
+    result = provider.diff(
+        "123",
+        {"hostname": "x", "package_id": 81, "pricing_id": 245},
+        {"hostname": "x", "package_id": 82, "pricing_id": 249},
+    )
+    assert result.changes is True
+    assert "package_id" not in result.replaces
+    assert "pricing_id" not in result.replaces

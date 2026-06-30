@@ -15,6 +15,8 @@ from your Pulumi stack.
   `ready`).
 - **VM power management** -- set `power_state` to `running` or `stopped` on any
   VM; changing it triggers an in-place start/stop without replacing the VM.
+- **In-place VM upgrade** -- changing `package_id` and `pricing_id` triggers an
+  in-place upgrade via the SHC upgrade API (no destroy/recreate).
 - **Snapshot management** -- create, list, read, and delete VM snapshots as
   standalone Pulumi resources.
 - **Firewall rules** -- create, read, and delete individual VM firewall rules
@@ -98,8 +100,8 @@ A Pulumi dynamic resource representing a single SHC VPS instance.
 | Argument      | Type                | Required | Default | Description |
 |---------------|---------------------|----------|---------|-------------|
 | `hostname`    | `pulumi.Input[str]` | yes      |         | Hostname assigned to the VM. Changing this forces replacement. |
-| `package_id`  | `pulumi.Input[int]` | yes      |         | SHC package ID (plan). Changing this forces replacement. |
-| `pricing_id`  | `pulumi.Input[int]` | yes      |         | SHC pricing option ID for the chosen package. Changing this forces replacement. |
+| `package_id`  | `pulumi.Input[int]` | yes      |         | SHC package ID (plan). Changing this triggers an in-place upgrade. |
+| `pricing_id`  | `pulumi.Input[int]` | yes      |         | SHC pricing option ID for the chosen package. Changing this triggers an in-place upgrade. |
 | `api_key`     | `pulumi.Input[str]` | yes      |         | SHC API key. Pass as a Pulumi secret for safety. |
 | `ssh_key`     | `pulumi.Input[str]` | no       | `None`  | Public SSH key to install on the VM. |
 | `auto_cancel` | `bool`              | no       | `True`  | When `True`, schedules a non-immediate cancellation right after creation so that destroying the Pulumi resource also cancels the VPS. |
@@ -125,6 +127,22 @@ vm = SHCVMResource("web-server",
     api_key=pulumi.Config().require_secret("shc_api_key"),
     ssh_key=open("~/.ssh/id_rsa.pub").read().strip(),
     auto_cancel=True,
+)
+```
+
+### Upgrading a VM
+
+Changing `package_id` and `pricing_id` triggers an in-place upgrade via the SHC upgrade
+API. The upgrade is queued -- it creates a prorated invoice and the VM is resized after
+payment. Only upgrades (more CPU/RAM/disk) are supported.
+
+```python
+# Upgrade from Standard to Professional
+vm = SHCVMResource("web",
+    hostname="web-server",
+    package_id=82,  # was 81
+    pricing_id=249, # was 245
+    api_key=config.require_secret("shc_api_key"),
 )
 ```
 
@@ -271,7 +289,7 @@ You can generate an API key from the
 ## Known Limitations
 
 - **Snapshots & backups not available on Dev VPS plans**: Dev VPS plans (pkg 80-84) lack the storage infrastructure for snapshots and backups. `SHCSnapshotResource` will fail with `upstream_failure` on these plans. Use NVMe/SSD/HDD VPS plans (pkg 23+) for snapshot support. All other API features (firewall, rDNS, ISO, console, metrics) work on both plan types.
-- **No in-place updates**: Changes to `hostname`, `package_id`, `pricing_id`, or `ssh_key` force VM replacement. Changes to `auto_cancel`, `api_key`, or `power_state` update state only (`power_state` triggers an actual start/stop of the VM).
+- **Limited in-place updates**: Changes to `hostname` or `ssh_key` force VM replacement (destroy + recreate). Changes to `package_id` and `pricing_id` trigger an in-place upgrade via the SHC upgrade API (queued, prorated). Changes to `auto_cancel`, `api_key`, or `power_state` update state only (`power_state` triggers an actual start/stop of the VM).
 - **rDNS FCrDNS constraint**: The hostname set via `SHCrDNSResource` must have a matching forward DNS record (A/AAAA) pointing back to the same IP. SHC enforces forward-confirmed reverse DNS (FCrDNS); the rDNS set operation will fail if the forward lookup does not resolve to the target IP.
 
 ## License

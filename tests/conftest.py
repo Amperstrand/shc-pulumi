@@ -38,6 +38,9 @@ def _build_mock_client() -> MagicMock:
     client.start_vm.return_value = {"service_status": "active"}
     client.stop_vm.return_value = {"service_status": "stopped"}
 
+    # VM upgrade (in-place plan change).
+    client.upgrade_vm.return_value = {"status": "queued", "service_id": 123}
+
     # apply_ssh_key_live -> no-op success.
     client.apply_ssh_key_live.return_value = {}
 

@@ -26,10 +26,13 @@ _PROVISIONING_TIMEOUT = 300
 _PROVISIONING_INTERVAL = 5
 
 # Changes to these props force a full replacement (delete + recreate).
-_REPLACE_PROPS = frozenset({"hostname", "package_id", "pricing_id", "ssh_key"})
+_REPLACE_PROPS = frozenset({"hostname", "ssh_key"})
 # Changes to these props are detected and reported as updates but do NOT
-# force replacement of the underlying VM.
-_UPDATE_PROPS = frozenset({"auto_cancel", "api_key", "power_state"})
+# force replacement of the underlying VM.  ``package_id`` and ``pricing_id``
+# trigger an in-place upgrade via the SHC upgrade API.
+_UPDATE_PROPS = frozenset(
+    {"auto_cancel", "api_key", "power_state", "package_id", "pricing_id"}
+)
 # Output-only props that never trigger a diff.
 _STABLE_PROPS = frozenset({"ip", "service_id", "os_user", "status"})
 
@@ -262,7 +265,9 @@ class SHCVMProvider(ResourceProvider):
                 stables=list(_STABLE_PROPS),
             )
         if has_updates:
-            return DiffResult(changes=True, stables=list(_STABLE_PROPS))
+            return DiffResult(
+                changes=True, replaces=[], stables=list(_STABLE_PROPS)
+            )
         return DiffResult(changes=False, stables=list(_STABLE_PROPS))
 
     def update(
@@ -273,6 +278,11 @@ class SHCVMProvider(ResourceProvider):
     ) -> UpdateResult:
         client = self._get_client(props)
         sid = int(id_)
+
+        old_pricing = olds.get("pricing_id")
+        new_pricing = props.get("pricing_id")
+        if old_pricing and new_pricing and old_pricing != new_pricing:
+            client.upgrade_vm(sid, pricing_ref=int(new_pricing))
 
         old_power = olds.get("power_state", "running")
         new_power = props.get("power_state", "running")
