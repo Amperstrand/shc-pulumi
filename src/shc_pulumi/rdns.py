@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
+import time
 from typing import Any, Optional
 
 import pulumi
 from pulumi.dynamic import (
+    CheckFailure,
+    CheckResult,
     CreateResult,
     DiffResult,
     ReadResult,
@@ -44,6 +48,39 @@ class SHCrDNSProvider(ResourceProvider):
             )
         self.client = SHCClient(api_key=key)
         return self.client
+
+    def check(self, olds: dict[str, Any], news: dict[str, Any]) -> CheckResult:
+        failures: list[Any] = []
+
+        service_id = news.get("service_id")
+        if not isinstance(service_id, int) or service_id <= 0:
+            failures.append(
+                CheckFailure("service_id", "must be a positive integer")
+            )
+
+        ip = news.get("ip")
+        if not ip or not isinstance(ip, str):
+            failures.append(
+                CheckFailure("ip", "must be a valid IP address")
+            )
+        else:
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                failures.append(
+                    CheckFailure(
+                        "ip",
+                        f"must be a valid IPv4 or IPv6 address, got: {ip!r}",
+                    )
+                )
+
+        hostname = news.get("hostname")
+        if not hostname or not isinstance(hostname, str) or hostname.strip() == "":
+            failures.append(
+                CheckFailure("hostname", "must be a non-empty string")
+            )
+
+        return CheckResult(news, failures)
 
     def create(self, props: dict[str, Any]) -> CreateResult:
         client = self._get_client(props)
@@ -87,12 +124,24 @@ class SHCrDNSProvider(ResourceProvider):
         client = self._get_client(props)
         service_id = int(props["service_id"])
         ip = props["ip"]
-        try:
-            client.clear_rdns(service_id, ip=ip)
-        except SHCError as e:
-            if "not_found" in e.code:
+        last_exc: Exception | None = None
+        for attempt in range(4):
+            try:
+                client.clear_rdns(service_id, ip=ip)
                 return
-            raise
+            except SHCError as e:
+                if "not_found" in e.code:
+                    return
+                if "locked" in e.message.lower():
+                    last_exc = e
+                    if attempt < 3:
+                        time.sleep(5)
+                        continue
+                    break
+                raise
+        raise RuntimeError(
+            "VM is locked by a running job. Wait for it to complete and try again."
+        ) from last_exc
 
     def diff(
         self,

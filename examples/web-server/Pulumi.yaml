@@ -1,0 +1,30 @@
+name: web-server
+runtime: python
+description: A web server on SHC with firewall rules and snapshot
+
+config:
+  shc_api_key:
+    description: SHC API key for authentication
+    secret: true
+
+  hostname:
+    description: Hostname for the web server
+    default: web-server
+
+  package_id:
+    description: SHC package ID (26 = NVMe Standard, 2C/8GB/16GB)
+    default: 26
+
+  pricing_id:
+    description: SHC pricing ID for the package
+    default: 55
+
+  snapshot_name:
+    description: Name for the initial snapshot
+    default: initial-deploy
+
+  ssh_source_ranges:
+    description: Allowed CIDR ranges for SSH access
+    type: list
+    default:
+      - 0.0.0.0/0

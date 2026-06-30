@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 import pulumi
 from pulumi.dynamic import (
+    CheckFailure,
+    CheckResult,
     CreateResult,
     DiffResult,
     ReadResult,
@@ -63,6 +65,47 @@ class SHCVMProvider(ResourceProvider):
         return self.client
 
     # -- CRUD ---------------------------------------------------
+
+    def check(self, olds: dict[str, Any], news: dict[str, Any]) -> CheckResult:
+        failures: list[Any] = []
+
+        package_id = news.get("package_id")
+        if not isinstance(package_id, int) or package_id <= 0:
+            failures.append(
+                CheckFailure(
+                    "package_id",
+                    "must be a positive integer",
+                )
+            )
+
+        pricing_id = news.get("pricing_id")
+        if not isinstance(pricing_id, int) or pricing_id <= 0:
+            failures.append(
+                CheckFailure(
+                    "pricing_id",
+                    "must be a positive integer",
+                )
+            )
+
+        hostname = news.get("hostname")
+        if not hostname or not isinstance(hostname, str) or hostname.strip() == "":
+            failures.append(
+                CheckFailure(
+                    "hostname",
+                    "must be a non-empty string",
+                )
+            )
+
+        power_state = news.get("power_state", "running")
+        if power_state not in ("running", "stopped"):
+            failures.append(
+                CheckFailure(
+                    "power_state",
+                    f"must be 'running' or 'stopped', got: {power_state!r}",
+                )
+            )
+
+        return CheckResult(news, failures)
 
     def create(self, props: dict[str, Any]) -> CreateResult:
         client = self._get_client(props)
@@ -175,12 +218,24 @@ class SHCVMProvider(ResourceProvider):
 
     def delete(self, id_: str, props: dict[str, Any]) -> None:
         client = self._get_client(props)
-        try:
-            client.cancel_vm(int(id_), immediate=True)
-        except SHCError as e:
-            if "not_found" in e.code or "already" in e.message.lower():
+        last_exc: Exception | None = None
+        for attempt in range(4):
+            try:
+                client.cancel_vm(int(id_), immediate=True)
                 return
-            raise
+            except SHCError as e:
+                if "not_found" in e.code or "already" in e.message.lower():
+                    return
+                if "locked" in e.message.lower():
+                    last_exc = e
+                    if attempt < 3:
+                        time.sleep(5)
+                        continue
+                    break
+                raise
+        raise RuntimeError(
+            "VM is locked by a running job. Wait for it to complete and try again."
+        ) from last_exc
 
     def diff(
         self,

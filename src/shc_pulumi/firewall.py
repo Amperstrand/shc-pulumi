@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Optional
 
 import pulumi
 from pulumi.dynamic import (
+    CheckFailure,
+    CheckResult,
     CreateResult,
     DiffResult,
     ReadResult,
@@ -45,6 +48,54 @@ class SHCFirewallRuleProvider(ResourceProvider):
             )
         self.client = SHCClient(api_key=key)
         return self.client
+
+    def check(self, olds: dict[str, Any], news: dict[str, Any]) -> CheckResult:
+        failures: list[Any] = []
+
+        service_id = news.get("service_id")
+        if not isinstance(service_id, int) or service_id <= 0:
+            failures.append(
+                CheckFailure("service_id", "must be a positive integer")
+            )
+
+        protocol = news.get("protocol", "tcp")
+        if protocol not in ("tcp", "udp", "icmp"):
+            failures.append(
+                CheckFailure(
+                    "protocol",
+                    f"must be 'tcp', 'udp', or 'icmp', got: {protocol!r}",
+                )
+            )
+
+        port = news.get("port")
+        if port is not None:
+            if not isinstance(port, str) or port.strip() == "":
+                failures.append(
+                    CheckFailure("port", "must be a non-empty string if provided")
+                )
+            else:
+                for part in port.split(","):
+                    part = part.strip()
+                    if "-" in part:
+                        lo, hi = part.split("-", 1)
+                        if not (lo.strip().isdigit() and hi.strip().isdigit()):
+                            failures.append(
+                                CheckFailure(
+                                    "port",
+                                    f"invalid port range: {part!r}",
+                                )
+                            )
+                            break
+                    elif not part.isdigit():
+                        failures.append(
+                            CheckFailure(
+                                "port",
+                                f"invalid port number: {part!r}",
+                            )
+                        )
+                        break
+
+        return CheckResult(news, failures)
 
     def create(self, props: dict[str, Any]) -> CreateResult:
         client = self._get_client(props)
@@ -117,12 +168,24 @@ class SHCFirewallRuleProvider(ResourceProvider):
         position = props.get("position")
         if position is None:
             return
-        try:
-            client.delete_firewall_rule(service_id, int(position))
-        except SHCError as e:
-            if "not_found" in e.code:
+        last_exc: Exception | None = None
+        for attempt in range(4):
+            try:
+                client.delete_firewall_rule(service_id, int(position))
                 return
-            raise
+            except SHCError as e:
+                if "not_found" in e.code:
+                    return
+                if "locked" in e.message.lower():
+                    last_exc = e
+                    if attempt < 3:
+                        time.sleep(5)
+                        continue
+                    break
+                raise
+        raise RuntimeError(
+            "VM is locked by a running job. Wait for it to complete and try again."
+        ) from last_exc
 
     def update(
         self,

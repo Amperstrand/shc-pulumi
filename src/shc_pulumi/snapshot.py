@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Optional
 
 import pulumi
 from pulumi.dynamic import (
+    CheckFailure,
+    CheckResult,
     CreateResult,
     DiffResult,
     ReadResult,
@@ -63,6 +66,25 @@ class SHCSnapshotProvider(ResourceProvider):
         self.client = SHCClient(api_key=key)
         return self.client
 
+    # -- CRUD ---------------------------------------------------
+
+    def check(self, olds: dict[str, Any], news: dict[str, Any]) -> CheckResult:
+        failures: list[Any] = []
+
+        service_id = news.get("service_id")
+        if not isinstance(service_id, int) or service_id <= 0:
+            failures.append(
+                CheckFailure("service_id", "must be a positive integer")
+            )
+
+        name = news.get("name")
+        if not name or not isinstance(name, str) or name.strip() == "":
+            failures.append(
+                CheckFailure("snapshot_name", "must be a non-empty string")
+            )
+
+        return CheckResult(news, failures)
+
     def create(self, props: dict[str, Any]) -> CreateResult:
         client = self._get_client(props)
         service_id = int(props["service_id"])
@@ -110,13 +132,25 @@ class SHCSnapshotProvider(ResourceProvider):
     def delete(self, id_: str, props: dict[str, Any]) -> None:
         client = self._get_client(props)
         service_id = int(props["service_id"])
-        try:
-            client.delete_snapshot(service_id, id_)
-        except SHCError as e:
-            if "not_found" in e.code:
+        last_exc: Exception | None = None
+        for attempt in range(4):
+            try:
+                client.delete_snapshot(service_id, id_)
                 return
-            _raise_on_unsupported_storage(e, "delete snapshot")
-            raise
+            except SHCError as e:
+                if "not_found" in e.code:
+                    return
+                if "locked" in e.message.lower():
+                    last_exc = e
+                    if attempt < 3:
+                        time.sleep(5)
+                        continue
+                    break
+                _raise_on_unsupported_storage(e, "delete snapshot")
+                raise
+        raise RuntimeError(
+            "VM is locked by a running job. Wait for it to complete and try again."
+        ) from last_exc
 
     def diff(
         self,
