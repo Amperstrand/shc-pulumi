@@ -34,6 +34,10 @@ def _build_mock_client() -> MagicMock:
     # cancel_vm -> canceled status.
     client.cancel_vm.return_value = {"service_status": "canceled"}
 
+    # VM power management.
+    client.start_vm.return_value = {"service_status": "active"}
+    client.stop_vm.return_value = {"service_status": "stopped"}
+
     # apply_ssh_key_live -> no-op success.
     client.apply_ssh_key_live.return_value = {}
 
@@ -41,6 +45,30 @@ def _build_mock_client() -> MagicMock:
     client.list_snapshots.return_value = [{"id": "snap-1", "name": "test"}]
     client.create_snapshot.return_value = {"id": "snap-1", "name": "test"}
     client.delete_snapshot.return_value = {}
+
+    # Firewall lifecycle.
+    client.get_firewall.return_value = {
+        "rules": [
+            {
+                "position": 5,
+                "action": "accept",
+                "protocol": "tcp",
+                "dest_port": "22",
+                "source": "0.0.0.0/0",
+                "direction": "in",
+                "name": "allow-ssh",
+            },
+        ],
+    }
+    client.create_firewall_rule.return_value = {"position": 5}
+    client.delete_firewall_rule.return_value = {}
+
+    # rDNS lifecycle.
+    client.list_rdns.return_value = [
+        {"ip": "1.2.3.4", "ptr": "mail.example.com"},
+    ]
+    client.set_rdns.return_value = {"job_id": "job-42"}
+    client.clear_rdns.return_value = {}
 
     # Catalog (used by get_plan / test_catalog).
     client.get_catalog.return_value = [

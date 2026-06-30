@@ -204,3 +204,78 @@ def test_snapshot_diff_no_changes(mock_client):
         {"service_id": 123, "name": "a"},
     )
     assert result.changes is False
+
+
+# ---------------------------------------------------------------------------
+# SHCVMProvider power management
+# ---------------------------------------------------------------------------
+
+
+def test_create_vm_with_power_state_stopped(mock_client):
+    """When power_state is 'stopped', stop_vm must be called after VM is ready."""
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.create({
+            "hostname": "test-vm",
+            "package_id": 81,
+            "pricing_id": 245,
+            "api_key": "test",
+            "auto_cancel": False,
+            "power_state": "stopped",
+        })
+    assert result.id == "123"
+    mock_client.stop_vm.assert_called_once_with(123)
+
+
+def test_update_power_state(mock_client):
+    """The update method must call stop_vm / start_vm when power_state changes."""
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+
+        # running -> stopped: should call stop_vm
+        result = provider.update(
+            "123",
+            {
+                "hostname": "test-vm",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+                "power_state": "stopped",
+                "service_id": 123,
+            },
+            {
+                "hostname": "test-vm",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+                "power_state": "running",
+                "service_id": 123,
+            },
+        )
+    mock_client.stop_vm.assert_called_once_with(123)
+    assert result.outs["power_state"] == "stopped"
+
+    mock_client.reset_mock()
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.update(
+            "123",
+            {
+                "hostname": "test-vm",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+                "power_state": "running",
+                "service_id": 123,
+            },
+            {
+                "hostname": "test-vm",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+                "power_state": "stopped",
+                "service_id": 123,
+            },
+        )
+    mock_client.start_vm.assert_called_once_with(123)
+    assert result.outs["power_state"] == "running"

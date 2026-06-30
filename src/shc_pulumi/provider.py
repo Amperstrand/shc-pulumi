@@ -13,6 +13,7 @@ from pulumi.dynamic import (
     DiffResult,
     ReadResult,
     ResourceProvider,
+    UpdateResult,
 )
 from shc_toolkit import SHCClient
 from shc_toolkit.client import SHCError
@@ -26,7 +27,7 @@ _PROVISIONING_INTERVAL = 5
 _REPLACE_PROPS = frozenset({"hostname", "package_id", "pricing_id", "ssh_key"})
 # Changes to these props are detected and reported as updates but do NOT
 # force replacement of the underlying VM.
-_UPDATE_PROPS = frozenset({"auto_cancel", "api_key"})
+_UPDATE_PROPS = frozenset({"auto_cancel", "api_key", "power_state"})
 # Output-only props that never trigger a diff.
 _STABLE_PROPS = frozenset({"ip", "service_id", "os_user", "status"})
 
@@ -86,6 +87,16 @@ class SHCVMProvider(ResourceProvider):
         sid = int(service_id)
 
         vm = self._wait_for_ready(client, sid)
+
+        # Honor the requested power state: if the user wants the VM
+        # stopped after provisioning, stop it now.
+        if props.get("power_state", "running") == "stopped":
+            try:
+                client.stop_vm(sid)
+            except Exception as exc:
+                logger.warning(
+                    "stop_vm failed for VM %s after creation: %s", sid, exc
+                )
 
         ssh_key = props.get("ssh_key")
         if ssh_key:
@@ -199,6 +210,27 @@ class SHCVMProvider(ResourceProvider):
             return DiffResult(changes=True, stables=list(_STABLE_PROPS))
         return DiffResult(changes=False, stables=list(_STABLE_PROPS))
 
+    def update(
+        self,
+        id_: str,
+        props: dict[str, Any],
+        olds: dict[str, Any],
+    ) -> UpdateResult:
+        client = self._get_client(props)
+        sid = int(id_)
+
+        old_power = olds.get("power_state", "running")
+        new_power = props.get("power_state", "running")
+        if old_power != new_power:
+            if new_power == "stopped":
+                client.stop_vm(sid)
+            elif new_power == "running":
+                client.start_vm(sid)
+
+        outs = dict(olds)
+        outs.update({k: v for k, v in props.items() if k != "api_key"})
+        return UpdateResult(outs=outs)
+
     # -- Helpers ------------------------------------------------
 
     @staticmethod
@@ -256,6 +288,7 @@ class SHCVMResource(pulumi.dynamic.Resource):
         api_key: pulumi.Input[str],
         ssh_key: Optional[pulumi.Input[str]] = None,
         auto_cancel: bool = True,
+        power_state: pulumi.Input[str] = "running",
         opts: Optional[pulumi.ResourceOptions] = None,
     ):
         provider = SHCVMProvider()
@@ -272,4 +305,5 @@ class SHCVMResource(pulumi.dynamic.Resource):
         if ssh_key is not None:
             props["ssh_key"] = ssh_key
         props["auto_cancel"] = auto_cancel
+        props["power_state"] = power_state
         super().__init__(provider, name, props, opts)

@@ -13,7 +13,13 @@ from your Pulumi stack.
 - **VM lifecycle** -- create, read, delete, and diff SHC virtual machines with
   automatic provisioning-state polling (waits up to 300 s for a VM to reach
   `ready`).
+- **VM power management** -- set `power_state` to `running` or `stopped` on any
+  VM; changing it triggers an in-place start/stop without replacing the VM.
 - **Snapshot management** -- create, list, read, and delete VM snapshots as
+  standalone Pulumi resources.
+- **Firewall rules** -- create, read, and delete individual VM firewall rules
+  as standalone Pulumi resources.
+- **Reverse DNS (rDNS)** -- manage PTR records for VM IP addresses as
   standalone Pulumi resources.
 - **SSH key injection** -- optionally inject a public SSH key onto the VM at
   creation time (retried up to 3 times).
@@ -97,6 +103,7 @@ A Pulumi dynamic resource representing a single SHC VPS instance.
 | `api_key`     | `pulumi.Input[str]` | yes      |         | SHC API key. Pass as a Pulumi secret for safety. |
 | `ssh_key`     | `pulumi.Input[str]` | no       | `None`  | Public SSH key to install on the VM. |
 | `auto_cancel` | `bool`              | no       | `True`  | When `True`, schedules a non-immediate cancellation right after creation so that destroying the Pulumi resource also cancels the VPS. |
+| `power_state` | `pulumi.Input[str]` | no       | `running` | Desired VM power state: `running` or `stopped`. Changing this triggers an in-place start/stop without replacing the VM. When `stopped`, the VM is stopped immediately after provisioning reaches `ready`. |
 
 **Outputs**
 
@@ -153,6 +160,89 @@ snapshot = SHCSnapshotResource("pre-deploy",
 )
 ```
 
+### `SHCFirewallRuleResource`
+
+A Pulumi dynamic resource representing a single firewall rule on an SHC VM.
+
+**Inputs**
+
+| Argument     | Type                | Required | Default       | Description |
+|--------------|---------------------|----------|---------------|-------------|
+| `service_id` | `pulumi.Input[int]` | yes      |               | SHC service ID of the VM. Changing this forces replacement. |
+| `api_key`    | `pulumi.Input[str]` | yes      |               | SHC API key. |
+| `action`     | `pulumi.Input[str]` | no       | `accept`      | Firewall action (`accept` or `drop`). Changing this forces replacement. |
+| `protocol`   | `pulumi.Input[str]` | no       | `tcp`         | Protocol (`tcp`, `udp`, etc.). Changing this forces replacement. |
+| `port`       | `pulumi.Input[str]` | no       | `None`        | Destination port or port range. Changing this forces replacement. |
+| `source`     | `pulumi.Input[str]` | no       | `0.0.0.0/0`   | Source CIDR. Changing this forces replacement. |
+| `direction`  | `pulumi.Input[str]` | no       | `in`          | Direction (`in` or `out`). |
+| `rule_name`  | `pulumi.Input[str]` | no       | resource name | Human-readable label for the rule. |
+
+**Outputs**
+
+| Output       | Type  | Description |
+|--------------|-------|-------------|
+| `position`   | `int` | Position (priority) of the rule in the VM's firewall chain. |
+| `service_id` | `int` | Service ID the rule belongs to. |
+| `action`     | `str` | Echoed action value. |
+| `protocol`   | `str` | Echoed protocol value. |
+| `port`       | `str` | Echoed port value. |
+| `source`     | `str` | Echoed source CIDR. |
+| `direction`  | `str` | Echoed direction. |
+| `name`       | `str` | Echoed rule label. |
+
+**Example**
+
+```python
+from shc_pulumi import SHCFirewallRuleResource
+
+allow_ssh = SHCFirewallRuleResource("allow-ssh",
+    service_id=vm.service_id,
+    api_key=pulumi.Config().require_secret("shc_api_key"),
+    action="accept",
+    protocol="tcp",
+    port="22",
+    source="0.0.0.0/0",
+    direction="in",
+    rule_name="allow-ssh",
+)
+```
+
+### `SHCrDNSResource`
+
+A Pulumi dynamic resource representing a reverse DNS (PTR) record for a single
+VM IP address.
+
+**Inputs**
+
+| Argument     | Type                | Required | Default | Description |
+|--------------|---------------------|----------|---------|-------------|
+| `service_id` | `pulumi.Input[int]` | yes      |         | SHC service ID of the VM. Changing this forces replacement. |
+| `api_key`    | `pulumi.Input[str]` | yes      |         | SHC API key. |
+| `ip`         | `pulumi.Input[str]` | yes      |         | IP address to set the PTR record on. Changing this forces replacement. |
+| `hostname`   | `pulumi.Input[str]` | yes      |         | The PTR value (reverse DNS hostname). Changing this forces replacement. |
+
+**Outputs**
+
+| Output       | Type  | Description |
+|--------------|-------|-------------|
+| `job_id`     | `str` | Job ID returned by the rDNS set operation (may be empty). |
+| `service_id` | `int` | Service ID the record belongs to. |
+| `ip`         | `str` | Echoed IP address. |
+| `hostname`   | `str` | Echoed PTR hostname. |
+
+**Example**
+
+```python
+from shc_pulumi import SHCrDNSResource
+
+rdns = SHCrDNSResource("vm-rdns",
+    service_id=vm.service_id,
+    api_key=pulumi.Config().require_secret("shc_api_key"),
+    ip=vm.ip,
+    hostname="mail.example.com",
+)
+```
+
 ## Configuration
 
 The provider needs an SHC API key to authenticate. Provide it in either of two
@@ -181,7 +271,8 @@ You can generate an API key from the
 ## Known Limitations
 
 - **Snapshots & backups not available on Dev VPS plans**: Dev VPS plans (pkg 80-84) lack the storage infrastructure for snapshots and backups. `SHCSnapshotResource` will fail with `upstream_failure` on these plans. Use NVMe/SSD/HDD VPS plans (pkg 23+) for snapshot support. All other API features (firewall, rDNS, ISO, console, metrics) work on both plan types.
-- **No in-place updates**: Changes to `hostname`, `package_id`, `pricing_id`, or `ssh_key` force VM replacement. Changes to `auto_cancel` or `api_key` update state only.
+- **No in-place updates**: Changes to `hostname`, `package_id`, `pricing_id`, or `ssh_key` force VM replacement. Changes to `auto_cancel`, `api_key`, or `power_state` update state only (`power_state` triggers an actual start/stop of the VM).
+- **rDNS FCrDNS constraint**: The hostname set via `SHCrDNSResource` must have a matching forward DNS record (A/AAAA) pointing back to the same IP. SHC enforces forward-confirmed reverse DNS (FCrDNS); the rDNS set operation will fail if the forward lookup does not resolve to the target IP.
 
 ## License
 

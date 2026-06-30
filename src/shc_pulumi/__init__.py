@@ -2,6 +2,8 @@
 
 from .provider import SHCVMProvider, SHCVMResource
 from .snapshot import SHCSnapshotProvider, SHCSnapshotResource
+from .firewall import SHCFirewallRuleProvider, SHCFirewallRuleResource
+from .rdns import SHCrDNSProvider, SHCrDNSResource
 
 
 def get_plan(name: str, period: str = "day"):
@@ -42,5 +44,9 @@ __all__ = [
     "SHCVMResource",
     "SHCSnapshotProvider",
     "SHCSnapshotResource",
+    "SHCFirewallRuleProvider",
+    "SHCFirewallRuleResource",
+    "SHCrDNSProvider",
+    "SHCrDNSResource",
     "get_plan",
 ]
