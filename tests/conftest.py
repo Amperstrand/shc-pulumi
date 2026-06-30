@@ -45,6 +45,7 @@ def _build_mock_client() -> MagicMock:
     client.list_snapshots.return_value = [{"id": "snap-1", "name": "test"}]
     client.create_snapshot.return_value = {"id": "snap-1", "name": "test"}
     client.delete_snapshot.return_value = {}
+    client.restore_snapshot.return_value = {"job_id": "job-restore-1"}
 
     # Firewall lifecycle.
     client.get_firewall.return_value = {
@@ -75,19 +76,32 @@ def _build_mock_client() -> MagicMock:
         {
             "package_id": 23,
             "name": "NVMe VPS - Starter",
+            "cpu": 1,
+            "memory_mb": 2048,
+            "disk_gb": 25,
             "pricing": [
-                {"period": "day", "pricing_id": 55},
-                {"period": "month", "pricing_id": 56},
+                {"period": "day", "pricing_id": 55, "price": "0.50"},
+                {"period": "week", "pricing_id": 57, "price": "3.00"},
+                {"period": "month", "pricing_id": 56, "price": "10.00"},
             ],
         },
         {
             "package_id": 81,
             "name": "NVMe VPS - Standard",
+            "cpu": 2,
+            "memory_mb": 4096,
+            "disk_gb": 50,
             "pricing": [
-                {"period": "day", "pricing_id": 245},
-                {"period": "month", "pricing_id": 246},
+                {"period": "day", "pricing_id": 245, "price": "1.00"},
+                {"period": "month", "pricing_id": 246, "price": "20.00"},
             ],
         },
+    ]
+
+    # Templates (used by get_templates).
+    client.list_templates.return_value = [
+        {"name": "debian13-cloud", "family": "debian", "arch": "x86_64", "status": "active"},
+        {"name": "ubuntu2404-cloud", "family": "ubuntu", "arch": "x86_64", "status": "active"},
     ]
 
     return client

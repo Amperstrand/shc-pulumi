@@ -39,6 +39,33 @@ def get_plan(name: str, period: str = "day"):
     raise ValueError(f"Plan '{name}' not found in catalog")
 
 
+def get_templates():
+    """List available OS templates."""
+    from shc_toolkit import SHCClient
+
+    c = SHCClient()
+    return c.list_templates()
+
+
+def get_machine_types():
+    """List available VPS plans with specs and pricing."""
+    from shc_toolkit import SHCClient
+
+    c = SHCClient()
+    result = []
+    for pkg in c.get_catalog():
+        daily = next((p for p in pkg.get("pricing", []) if p.get("period") == "day"), {})
+        result.append({
+            "name": pkg.get("name", ""),
+            "package_id": pkg.get("package_id"),
+            "cpu": pkg.get("cpu"),
+            "memory_mb": pkg.get("memory_mb"),
+            "disk_gb": pkg.get("disk_gb"),
+            "price_daily": daily.get("price"),
+        })
+    return result
+
+
 __all__ = [
     "SHCVMProvider",
     "SHCVMResource",
@@ -49,4 +76,6 @@ __all__ = [
     "SHCrDNSProvider",
     "SHCrDNSResource",
     "get_plan",
+    "get_templates",
+    "get_machine_types",
 ]

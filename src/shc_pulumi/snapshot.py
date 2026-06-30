@@ -12,6 +12,7 @@ from pulumi.dynamic import (
     DiffResult,
     ReadResult,
     ResourceProvider,
+    UpdateResult,
 )
 from shc_toolkit import SHCClient
 from shc_toolkit.client import SHCError
@@ -129,7 +130,29 @@ class SHCSnapshotProvider(ResourceProvider):
                 replaces.append(prop)
         if replaces:
             return DiffResult(changes=True, replaces=replaces)
+        if news.get("restore") and not olds.get("restore"):
+            return DiffResult(changes=True)
         return DiffResult(changes=False)
+
+    def update(self, id_: str, olds: dict[str, Any], news: dict[str, Any]) -> UpdateResult:
+        client = self._get_client(news)
+        service_id = int(news["service_id"])
+
+        if news.get("restore") and not olds.get("restore"):
+            try:
+                client.restore_snapshot(service_id, id_)
+            except SHCError as e:
+                _raise_on_unsupported_storage(e, "restore snapshot")
+                raise
+
+        return UpdateResult(
+            outs={
+                "snapshot_id": id_,
+                "service_id": service_id,
+                "name": news.get("name", olds.get("name", "")),
+                "restore": False,
+            }
+        )
 
 
 class SHCSnapshotResource(pulumi.dynamic.Resource):
@@ -147,6 +170,7 @@ class SHCSnapshotResource(pulumi.dynamic.Resource):
     snapshot_id: pulumi.Output[str]
     service_id: pulumi.Output[int]
     name: pulumi.Output[str]
+    restore: pulumi.Output[bool]
 
     def __init__(
         self,
@@ -154,6 +178,7 @@ class SHCSnapshotResource(pulumi.dynamic.Resource):
         service_id: pulumi.Input[int],
         api_key: pulumi.Input[str],
         snapshot_name: Optional[pulumi.Input[str]] = None,
+        restore: Optional[pulumi.Input[bool]] = None,
         opts: Optional[pulumi.ResourceOptions] = None,
     ):
         provider = SHCSnapshotProvider()
@@ -161,6 +186,7 @@ class SHCSnapshotResource(pulumi.dynamic.Resource):
             "service_id": service_id,
             "api_key": pulumi.Output.secret(api_key) if api_key else "",
             "name": snapshot_name or name,
+            "restore": restore if restore is not None else False,
             "snapshot_id": None,
         }
         super().__init__(provider, name, props, opts)
