@@ -28,6 +28,8 @@ from your Pulumi stack.
 - **Auto-cancel on destroy** -- every VM resource defaults to
   `auto_cancel=True`, so destroying a Pulumi stack cancels the underlying VPS
   without manual intervention.
+- **NoDNS hostnames** -- optionally auto-publish a `.nodns.shop` or
+  `.dns4sats.xyz` domain pointing to the VM via Nostr (kind 11111 events).
 - **Secret-safe API key** -- the API key is accepted as a plain string or a
   Pulumi secret `Output`, and is never logged.
 
@@ -107,6 +109,8 @@ A Pulumi dynamic resource representing a single SHC VPS instance.
 | `ssh_key`     | `pulumi.Input[str]` | no       | `None`  | Public SSH key to install on the VM. |
 | `auto_cancel` | `bool`              | no       | `True`  | When `True`, schedules a non-immediate cancellation right after creation so that destroying the Pulumi resource also cancels the VPS. |
 | `power_state` | `pulumi.Input[str]` | no       | `running` | Desired VM power state: `running` or `stopped`. Changing this triggers an in-place start/stop without replacing the VM. When `stopped`, the VM is stopped immediately after provisioning reaches `ready`. |
+| `nodns`       | `pulumi.Input[bool]`| no       | `None`  | If `True`, auto-publishes a NoDNS record pointing to the VM's IP after provisioning. Requires `shc-toolkit[nostr]` (`nostr-sdk`). |
+| `nodns_zone`  | `pulumi.Input[str]` | no       | `nodns.shop` | NoDNS zone: `nodns.shop` or `dns4sats.xyz`. Only used when `nodns=True`. |
 
 **Outputs**
 
@@ -117,6 +121,8 @@ A Pulumi dynamic resource representing a single SHC VPS instance.
 | `service_id`  | `int`   | SHC service ID for the VM. |
 | `os_user`     | `str`   | Default OS login user (e.g. `debian`). |
 | `status`      | `str`   | Last-known provisioning state (e.g. `ready`). |
+| `fqdn`        | `str`   | NoDNS FQDN (e.g. `npub1abc.nodns.shop`). Empty unless `nodns=True`. |
+| `nodns_nsec`  | `str`   | Nostr secret key for the NoDNS record. Empty unless `nodns=True`. Store securely. |
 
 **Example**
 
@@ -161,6 +167,31 @@ vm = SHCVMResource("web",
 
 Sizes: starter, standard, professional, business, enterprise (NVMe);
 dev-starter, dev-standard, dev-professional, dev-business, dev-enterprise (Dev VPS).
+
+### NoDNS hostname
+
+Set `nodns=True` to automatically get a `.nodns.shop` (or `.dns4sats.xyz`)
+domain pointing to the VM's IP. The provider calls `provision_dns_for_vm` from
+`shc-toolkit`, which publishes a kind 11111 Nostr event. The FQDN and nsec
+secret key are exposed as outputs.
+
+Requires the optional `nostr-sdk` dependency:
+
+```bash
+pip install shc-toolkit[nostr]
+```
+
+```python
+vm = SHCVMResource("web",
+    hostname="web-server",
+    size="standard",
+    api_key=config.require_secret("shc_api_key"),
+    nodns=True,
+    nodns_zone="dns4sats.xyz",
+)
+
+pulumi.export("fqdn", vm.fqdn)
+```
 
 ### `SHCSnapshotResource`
 

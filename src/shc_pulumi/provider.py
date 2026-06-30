@@ -29,14 +29,11 @@ _PROVISIONING_INTERVAL = 5
 
 # Changes to these props force a full replacement (delete + recreate).
 _REPLACE_PROPS = frozenset({"hostname", "ssh_key"})
-# Changes to these props are detected and reported as updates but do NOT
-# force replacement of the underlying VM.  ``package_id`` and ``pricing_id``
-# trigger an in-place upgrade via the SHC upgrade API.
 _UPDATE_PROPS = frozenset(
-    {"auto_cancel", "api_key", "power_state", "package_id", "pricing_id", "size"}
+    {"auto_cancel", "api_key", "power_state", "package_id", "pricing_id", "size",
+     "nodns", "nodns_zone"}
 )
-# Output-only props that never trigger a diff.
-_STABLE_PROPS = frozenset({"ip", "service_id", "os_user", "status"})
+_STABLE_PROPS = frozenset({"ip", "service_id", "os_user", "status", "fqdn", "nodns_nsec"})
 
 
 class SHCVMProvider(ResourceProvider):
@@ -213,9 +210,37 @@ class SHCVMProvider(ResourceProvider):
             "status": vm.get("provisioning_state", "ready"),
             "package_id": package_id,
             "pricing_id": pricing_id,
+            "fqdn": "",
+            "nodns_nsec": "",
         }
+
+        if props.get("nodns") and ip:
+            zone = props.get("nodns_zone") or "nodns.shop"
+            try:
+                from shc_toolkit.nodns import provision_dns_for_vm
+
+                dns = provision_dns_for_vm(ip=ip, zone=zone)
+                outs["fqdn"] = dns.get("fqdn", "")
+                outs["nodns_nsec"] = dns.get("keypair", {}).get("nsec", "")
+                logger.info(
+                    "NoDNS record published for VM %s: %s", sid, outs["fqdn"]
+                )
+            except ImportError:
+                logger.warning(
+                    "nodns=True but shc_toolkit.nodns is unavailable "
+                    "(nostr-sdk not installed); skipping NoDNS provisioning."
+                )
+            except Exception as exc:
+                logger.warning(
+                    "NoDNS provisioning failed for VM %s: %s", sid, exc
+                )
+
         if props.get("size"):
             outs["size"] = props["size"]
+        if props.get("nodns"):
+            outs["nodns"] = props["nodns"]
+        if props.get("nodns_zone"):
+            outs["nodns_zone"] = props["nodns_zone"]
         return CreateResult(id_=str(sid), outs=outs)
 
     def read(self, id_: str, props: dict[str, Any]) -> ReadResult:
@@ -370,6 +395,8 @@ class SHCVMResource(pulumi.dynamic.Resource):
     service_id: pulumi.Output[int]
     os_user: pulumi.Output[str]
     status: pulumi.Output[str]
+    fqdn: pulumi.Output[str]
+    nodns_nsec: pulumi.Output[str]
 
     def __init__(
         self,
@@ -382,6 +409,8 @@ class SHCVMResource(pulumi.dynamic.Resource):
         auto_cancel: bool = True,
         power_state: pulumi.Input[str] = "running",
         size: Optional[pulumi.Input[str]] = None,
+        nodns: Optional[pulumi.Input[bool]] = None,
+        nodns_zone: Optional[pulumi.Input[str]] = None,
         opts: Optional[pulumi.ResourceOptions] = None,
     ):
         if size is not None:
@@ -402,6 +431,8 @@ class SHCVMResource(pulumi.dynamic.Resource):
             "service_id": None,
             "os_user": None,
             "status": None,
+            "fqdn": None,
+            "nodns_nsec": None,
         }
         if size is not None:
             props["size"] = size
@@ -409,4 +440,8 @@ class SHCVMResource(pulumi.dynamic.Resource):
             props["ssh_key"] = ssh_key
         props["auto_cancel"] = auto_cancel
         props["power_state"] = power_state
+        if nodns is not None:
+            props["nodns"] = nodns
+        if nodns_zone is not None:
+            props["nodns_zone"] = nodns_zone
         super().__init__(provider, name, props, opts)

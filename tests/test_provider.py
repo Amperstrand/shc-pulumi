@@ -7,7 +7,8 @@ All SHC API calls are mocked via the ``mock_client`` fixture defined in
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -341,3 +342,95 @@ def test_diff_package_id_no_longer_forces_replacement(mock_client):
     assert result.changes is True
     assert "package_id" not in result.replaces
     assert "pricing_id" not in result.replaces
+
+
+# ---------------------------------------------------------------------------
+# SHCVMProvider NoDNS integration
+# ---------------------------------------------------------------------------
+
+
+def test_create_vm_with_nodns(mock_client):
+    """When nodns=True, provision_dns_for_vm must be called and fqdn/nsec set."""
+    fake_dns = {
+        "fqdn": "npub1abc.nodns.shop",
+        "keypair": {"nsec": "nsec1fakekey", "npub": "npub1abc"},
+        "success": True,
+    }
+    mock_nodns = MagicMock()
+    mock_nodns.provision_dns_for_vm.return_value = fake_dns
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        with patch.dict(sys.modules, {"shc_toolkit.nodns": mock_nodns}):
+            provider = SHCVMProvider(api_key="test")
+            result = provider.create({
+                "hostname": "test-vm",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+                "auto_cancel": False,
+                "nodns": True,
+                "nodns_zone": "dns4sats.xyz",
+            })
+    assert result.id == "123"
+    assert result.outs["fqdn"] == "npub1abc.nodns.shop"
+    assert result.outs["nodns_nsec"] == "nsec1fakekey"
+    mock_nodns.provision_dns_for_vm.assert_called_once_with(
+        ip="1.2.3.4", zone="dns4sats.xyz"
+    )
+
+
+def test_create_vm_with_nodns_defaults_zone(mock_client):
+    """When nodns=True but nodns_zone is unset, defaults to nodns.shop."""
+    fake_dns = {
+        "fqdn": "npub1xyz.nodns.shop",
+        "keypair": {"nsec": "nsec1other"},
+        "success": True,
+    }
+    mock_nodns = MagicMock()
+    mock_nodns.provision_dns_for_vm.return_value = fake_dns
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        with patch.dict(sys.modules, {"shc_toolkit.nodns": mock_nodns}):
+            provider = SHCVMProvider(api_key="test")
+            result = provider.create({
+                "hostname": "test-vm",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+                "auto_cancel": False,
+                "nodns": True,
+            })
+    assert result.outs["fqdn"] == "npub1xyz.nodns.shop"
+    mock_nodns.provision_dns_for_vm.assert_called_once_with(
+        ip="1.2.3.4", zone="nodns.shop"
+    )
+
+
+def test_create_vm_without_nodns_has_empty_fqdn(mock_client):
+    """When nodns is not set, fqdn and nodns_nsec must be empty strings."""
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.create({
+            "hostname": "test-vm",
+            "package_id": 81,
+            "pricing_id": 245,
+            "api_key": "test",
+            "auto_cancel": False,
+        })
+    assert result.outs["fqdn"] == ""
+    assert result.outs["nodns_nsec"] == ""
+
+
+def test_create_vm_with_nodns_import_error_skips(mock_client):
+    """When nostr-sdk is not installed, NoDNS is skipped gracefully."""
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        with patch.dict(sys.modules, {"shc_toolkit.nodns": None}):
+            provider = SHCVMProvider(api_key="test")
+            result = provider.create({
+                "hostname": "test-vm",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+                "auto_cancel": False,
+                "nodns": True,
+            })
+    assert result.outs["fqdn"] == ""
+    assert result.outs["nodns_nsec"] == ""
