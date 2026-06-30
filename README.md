@@ -225,6 +225,39 @@ snapshot = SHCSnapshotResource("pre-deploy",
 )
 ```
 
+### `SHCBackupResource`
+
+A Pulumi dynamic resource representing a VM backup.
+
+**Inputs**
+
+| Argument      | Type                | Required | Default       | Description |
+|---------------|---------------------|----------|---------------|-------------|
+| `service_id`  | `pulumi.Input[int]` | yes      |               | SHC service ID of the VM to back up. Changing this forces replacement. |
+| `api_key`     | `pulumi.Input[str]` | yes      |               | SHC API key. |
+| `backup_name` | `pulumi.Input[str]` | no       | resource name | Name label for the backup. Changing this forces replacement. |
+| `restore`     | `pulumi.Input[bool]`| no       | `False`       | When `True`, restores from the named backup instead of creating a new one. |
+
+**Outputs**
+
+| Output       | Type  | Description |
+|--------------|-------|-------------|
+| `backup_id`  | `str` | ID of the created backup. |
+| `service_id` | `int` | Service ID the backup belongs to. |
+| `name`       | `str` | Backup name label. |
+
+**Example**
+
+```python
+from shc_pulumi import SHCBackupResource
+
+backup = SHCBackupResource("weekly",
+    service_id=vm.service_id,
+    api_key=pulumi.Config().require_secret("shc_api_key"),
+    backup_name="weekly",
+)
+```
+
 ### `SHCFirewallRuleResource`
 
 A Pulumi dynamic resource representing a single firewall rule on an SHC VM.

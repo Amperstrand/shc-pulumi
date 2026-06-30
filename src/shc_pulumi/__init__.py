@@ -2,6 +2,7 @@
 
 from .provider import SHCVMProvider, SHCVMResource
 from .snapshot import SHCSnapshotProvider, SHCSnapshotResource
+from .backup import SHCBackupProvider, SHCBackupResource
 from .firewall import SHCFirewallRuleProvider, SHCFirewallRuleResource
 from .rdns import SHCrDNSProvider, SHCrDNSResource
 from .sizes import SIZE_MAP, resolve_size, resolve_specs
@@ -72,6 +73,8 @@ __all__ = [
     "SHCVMResource",
     "SHCSnapshotProvider",
     "SHCSnapshotResource",
+    "SHCBackupProvider",
+    "SHCBackupResource",
     "SHCFirewallRuleProvider",
     "SHCFirewallRuleResource",
     "SHCrDNSProvider",

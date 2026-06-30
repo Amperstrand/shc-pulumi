@@ -50,6 +50,12 @@ def _build_mock_client() -> MagicMock:
     client.delete_snapshot.return_value = {}
     client.restore_snapshot.return_value = {"job_id": "job-restore-1"}
 
+    # Backup lifecycle.
+    client.list_backups.return_value = [{"id": "bk-1", "name": "test"}]
+    client.create_backup.return_value = {"id": "bk-1", "name": "test"}
+    client.delete_backup.return_value = {}
+    client.restore_backup.return_value = {}
+
     # Firewall lifecycle.
     client.get_firewall.return_value = {
         "rules": [
