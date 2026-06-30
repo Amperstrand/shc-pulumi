@@ -100,8 +100,9 @@ A Pulumi dynamic resource representing a single SHC VPS instance.
 | Argument      | Type                | Required | Default | Description |
 |---------------|---------------------|----------|---------|-------------|
 | `hostname`    | `pulumi.Input[str]` | yes      |         | Hostname assigned to the VM. Changing this forces replacement. |
-| `package_id`  | `pulumi.Input[int]` | yes      |         | SHC package ID (plan). Changing this triggers an in-place upgrade. |
-| `pricing_id`  | `pulumi.Input[int]` | yes      |         | SHC pricing option ID for the chosen package. Changing this triggers an in-place upgrade. |
+| `size`        | `pulumi.Input[str]` | no       | `None`  | Human-readable plan name (e.g. `standard`). Takes precedence over `package_id`/`pricing_id`. Changing this triggers an in-place upgrade. |
+| `package_id`  | `pulumi.Input[int]` | no       | `None`  | SHC package ID (plan). Required if `size` is not set. Changing this triggers an in-place upgrade. |
+| `pricing_id`  | `pulumi.Input[int]` | no       | `None`  | SHC pricing option ID for the chosen package. Required if `size` is not set. Changing this triggers an in-place upgrade. |
 | `api_key`     | `pulumi.Input[str]` | yes      |         | SHC API key. Pass as a Pulumi secret for safety. |
 | `ssh_key`     | `pulumi.Input[str]` | no       | `None`  | Public SSH key to install on the VM. |
 | `auto_cancel` | `bool`              | no       | `True`  | When `True`, schedules a non-immediate cancellation right after creation so that destroying the Pulumi resource also cancels the VPS. |
@@ -145,6 +146,21 @@ vm = SHCVMResource("web",
     api_key=config.require_secret("shc_api_key"),
 )
 ```
+
+### Size abstraction
+
+Instead of `package_id` and `pricing_id`, use `size`:
+
+```python
+vm = SHCVMResource("web",
+    hostname="web",
+    size="standard",
+    api_key=config.require_secret("shc_api_key"),
+)
+```
+
+Sizes: starter, standard, professional, business, enterprise (NVMe);
+dev-starter, dev-standard, dev-professional, dev-business, dev-enterprise (Dev VPS).
 
 ### `SHCSnapshotResource`
 

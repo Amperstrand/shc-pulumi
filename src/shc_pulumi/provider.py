@@ -20,6 +20,8 @@ from pulumi.dynamic import (
 from shc_toolkit import SHCClient
 from shc_toolkit.client import SHCError
 
+from .sizes import resolve_size
+
 logger = logging.getLogger(__name__)
 
 _PROVISIONING_TIMEOUT = 300
@@ -31,7 +33,7 @@ _REPLACE_PROPS = frozenset({"hostname", "ssh_key"})
 # force replacement of the underlying VM.  ``package_id`` and ``pricing_id``
 # trigger an in-place upgrade via the SHC upgrade API.
 _UPDATE_PROPS = frozenset(
-    {"auto_cancel", "api_key", "power_state", "package_id", "pricing_id"}
+    {"auto_cancel", "api_key", "power_state", "package_id", "pricing_id", "size"}
 )
 # Output-only props that never trigger a diff.
 _STABLE_PROPS = frozenset({"ip", "service_id", "os_user", "status"})
@@ -72,23 +74,37 @@ class SHCVMProvider(ResourceProvider):
     def check(self, olds: dict[str, Any], news: dict[str, Any]) -> CheckResult:
         failures: list[Any] = []
 
-        package_id = news.get("package_id")
-        if not isinstance(package_id, int) or package_id <= 0:
-            failures.append(
-                CheckFailure(
-                    "package_id",
-                    "must be a positive integer",
+        size = news.get("size")
+        if size:
+            if not isinstance(size, str) or size.strip() == "":
+                failures.append(
+                    CheckFailure("size", "must be a non-empty string")
                 )
-            )
+            else:
+                try:
+                    pkg_id, price_id = resolve_size(size)
+                    news["package_id"] = pkg_id
+                    news["pricing_id"] = price_id
+                except ValueError as exc:
+                    failures.append(CheckFailure("size", str(exc)))
+        else:
+            package_id = news.get("package_id")
+            if not isinstance(package_id, int) or package_id <= 0:
+                failures.append(
+                    CheckFailure(
+                        "package_id",
+                        "must be a positive integer",
+                    )
+                )
 
-        pricing_id = news.get("pricing_id")
-        if not isinstance(pricing_id, int) or pricing_id <= 0:
-            failures.append(
-                CheckFailure(
-                    "pricing_id",
-                    "must be a positive integer",
+            pricing_id = news.get("pricing_id")
+            if not isinstance(pricing_id, int) or pricing_id <= 0:
+                failures.append(
+                    CheckFailure(
+                        "pricing_id",
+                        "must be a positive integer",
+                    )
                 )
-            )
 
         hostname = news.get("hostname")
         if not hostname or not isinstance(hostname, str) or hostname.strip() == "":
@@ -198,6 +214,8 @@ class SHCVMProvider(ResourceProvider):
             "package_id": package_id,
             "pricing_id": pricing_id,
         }
+        if props.get("size"):
+            outs["size"] = props["size"]
         return CreateResult(id_=str(sid), outs=outs)
 
     def read(self, id_: str, props: dict[str, Any]) -> ReadResult:
@@ -217,6 +235,8 @@ class SHCVMProvider(ResourceProvider):
             "package_id": props.get("package_id"),
             "pricing_id": props.get("pricing_id"),
         }
+        if props.get("size"):
+            outs["size"] = props["size"]
         return ReadResult(id_=id_, outs=outs)
 
     def delete(self, id_: str, props: dict[str, Any]) -> None:
@@ -281,6 +301,14 @@ class SHCVMProvider(ResourceProvider):
 
         old_pricing = olds.get("pricing_id")
         new_pricing = props.get("pricing_id")
+
+        # When size changes, resolve the new pricing_id from the static map.
+        old_size = olds.get("size")
+        new_size = props.get("size")
+        if new_size and old_size != new_size:
+            _, resolved_pricing = resolve_size(new_size)
+            new_pricing = resolved_pricing
+
         if old_pricing and new_pricing and old_pricing != new_pricing:
             client.upgrade_vm(sid, pricing_ref=int(new_pricing))
 
@@ -328,8 +356,7 @@ class SHCVMResource(pulumi.dynamic.Resource):
 
         vm = SHCVMResource("my-vm",
             hostname="test-vm",
-            package_id=81,
-            pricing_id=245,
+            size="standard",
             api_key=pulumi.Config().require_secret("shc_api_key"),
             ssh_key=open("~/.ssh/id_rsa.pub").read().strip(),
             auto_cancel=True,
@@ -348,14 +375,23 @@ class SHCVMResource(pulumi.dynamic.Resource):
         self,
         name: str,
         hostname: pulumi.Input[str],
-        package_id: pulumi.Input[int],
-        pricing_id: pulumi.Input[int],
-        api_key: pulumi.Input[str],
+        api_key: pulumi.Input[str] = "",
+        package_id: Optional[pulumi.Input[int]] = None,
+        pricing_id: Optional[pulumi.Input[int]] = None,
         ssh_key: Optional[pulumi.Input[str]] = None,
         auto_cancel: bool = True,
         power_state: pulumi.Input[str] = "running",
+        size: Optional[pulumi.Input[str]] = None,
         opts: Optional[pulumi.ResourceOptions] = None,
     ):
+        if size is not None:
+            package_id, pricing_id = resolve_size(size)
+        elif package_id is None or pricing_id is None:
+            raise ValueError(
+                "Either 'size' or both 'package_id' and 'pricing_id' "
+                "must be provided"
+            )
+
         provider = SHCVMProvider()
         props: dict[str, Any] = {
             "hostname": hostname,
@@ -367,6 +403,8 @@ class SHCVMResource(pulumi.dynamic.Resource):
             "os_user": None,
             "status": None,
         }
+        if size is not None:
+            props["size"] = size
         if ssh_key is not None:
             props["ssh_key"] = ssh_key
         props["auto_cancel"] = auto_cancel

@@ -4,6 +4,7 @@ from .provider import SHCVMProvider, SHCVMResource
 from .snapshot import SHCSnapshotProvider, SHCSnapshotResource
 from .firewall import SHCFirewallRuleProvider, SHCFirewallRuleResource
 from .rdns import SHCrDNSProvider, SHCrDNSResource
+from .sizes import SIZE_MAP, resolve_size, resolve_specs
 
 
 def get_plan(name: str, period: str = "day"):
@@ -78,4 +79,7 @@ __all__ = [
     "get_plan",
     "get_templates",
     "get_machine_types",
+    "SIZE_MAP",
+    "resolve_size",
+    "resolve_specs",
 ]
