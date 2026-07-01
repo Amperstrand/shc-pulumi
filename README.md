@@ -8,28 +8,56 @@ API client and exposes SHC VPS instances (and their snapshots) as first-class
 Pulumi dynamic resources, so you can provision, inspect, and tear down VMs
 from your Pulumi stack.
 
+## Quick Start
+
+```python
+from shc_pulumi import SHCVMResource
+import pulumi
+
+vm = SHCVMResource("web",
+    hostname="web",
+    size="standard",
+    api_key=pulumi.Config().require_secret("shc_api_key"),
+)
+pulumi.export("ip", vm.ip)
+```
+
+```bash
+pulumi config set shc_api_key --secret
+pulumi up
+```
+
 ## Features
 
+- **Size abstraction** -- use `size="standard"` instead of raw package/pricing
+  IDs. The provider resolves the correct SHC package automatically. Changing
+  `size` triggers an in-place upgrade (not a destroy/recreate).
 - **VM lifecycle** -- create, read, delete, and diff SHC virtual machines with
-  automatic provisioning-state polling (waits up to 300 s for a VM to reach
+  automatic provisioning-state polling (waits up to 600 s for a VM to reach
   `ready`).
-- **VM power management** -- set `power_state` to `running` or `stopped` on any
-  VM; changing it triggers an in-place start/stop without replacing the VM.
-- **In-place VM upgrade** -- changing `package_id` and `pricing_id` triggers an
-  in-place upgrade via the SHC upgrade API (no destroy/recreate).
-- **Snapshot management** -- create, list, read, and delete VM snapshots as
-  standalone Pulumi resources.
-- **Firewall rules** -- create, read, and delete individual VM firewall rules
-  as standalone Pulumi resources.
-- **Reverse DNS (rDNS)** -- manage PTR records for VM IP addresses as
-  standalone Pulumi resources.
+- **In-place upgrade** -- changing `size` (or `package_id`/`pricing_id`)
+  triggers an in-place upgrade via the SHC upgrade API (no destroy/recreate).
+- **Power management** -- set `power_state` to `running` or `stopped`; changing
+  it triggers an in-place start/stop without replacing the VM.
+- **NoDNS hostnames** -- `nodns=True` auto-publishes a `.nodns.shop` or
+  `.dns4sats.xyz` domain pointing to the VM via Nostr (kind 11111 events).
+- **Firewall rules** -- `SHCFirewallRuleResource` manages individual VM
+  firewall rules as standalone Pulumi resources.
+- **Reverse DNS (rDNS)** -- `SHCrDNSResource` manages PTR records for VM IP
+  addresses.
+- **Backups** -- `SHCBackupResource` manages VM backups as standalone Pulumi
+  resources.
+- **Snapshots** -- `SHCSnapshotResource` manages VM snapshots.
+- **Credit safety** -- before ordering, `create()` checks available credit
+  against the estimated daily cost and raises early if funds are insufficient.
+  The check fails open (continues) if the billing endpoint is unreachable.
+- **Discovery helpers** -- `get_plan()`, `get_templates()`, and
+  `get_machine_types()` query the live SHC catalog.
 - **SSH key injection** -- optionally inject a public SSH key onto the VM at
   creation time (retried up to 3 times).
 - **Auto-cancel on destroy** -- every VM resource defaults to
   `auto_cancel=True`, so destroying a Pulumi stack cancels the underlying VPS
   without manual intervention.
-- **NoDNS hostnames** -- optionally auto-publish a `.nodns.shop` or
-  `.dns4sats.xyz` domain pointing to the VM via Nostr (kind 11111 events).
 - **Secret-safe API key** -- the API key is accepted as a plain string or a
   Pulumi secret `Output`, and is never logged.
 
@@ -70,8 +98,7 @@ You also need the Pulumi CLI and a Python 3.11+ runtime for your stack.
 
    vm = SHCVMResource("my-vm",
        hostname="pulumi-test",
-       package_id=81,
-       pricing_id=245,
+       size="standard",
        api_key=pulumi.Config().require_secret("shc_api_key"),
    )
 
@@ -129,8 +156,7 @@ A Pulumi dynamic resource representing a single SHC VPS instance.
 ```python
 vm = SHCVMResource("web-server",
     hostname="web-01",
-    package_id=81,
-    pricing_id=245,
+    size="standard",
     api_key=pulumi.Config().require_secret("shc_api_key"),
     ssh_key=open("~/.ssh/id_rsa.pub").read().strip(),
     auto_cancel=True,
@@ -139,16 +165,16 @@ vm = SHCVMResource("web-server",
 
 ### Upgrading a VM
 
-Changing `package_id` and `pricing_id` triggers an in-place upgrade via the SHC upgrade
-API. The upgrade is queued -- it creates a prorated invoice and the VM is resized after
-payment. Only upgrades (more CPU/RAM/disk) are supported.
+Changing `size` (or `package_id` and `pricing_id`) triggers an in-place upgrade
+via the SHC upgrade API. The upgrade is queued -- it creates a prorated invoice
+and the VM is resized after payment. Only upgrades (more CPU/RAM/disk) are
+supported.
 
 ```python
-# Upgrade from Standard to Professional
+# Upgrade from Standard to Professional -- triggers update(), not replacement
 vm = SHCVMResource("web",
     hostname="web-server",
-    package_id=82,  # was 81
-    pricing_id=249, # was 245
+    size="professional",  # was "standard"
     api_key=config.require_secret("shc_api_key"),
 )
 ```
@@ -340,6 +366,66 @@ rdns = SHCrDNSResource("vm-rdns",
     hostname="mail.example.com",
 )
 ```
+
+## Discovery Helpers
+
+The package exports three helpers that query the live SHC catalog. These are
+useful for exploring available plans and templates before defining resources.
+
+### `get_plan(name, period="day")`
+
+Searches the catalog for a plan name (case-insensitive substring match) and
+returns `(package_id, pricing_id)` for the given billing period.
+
+```python
+from shc_pulumi import get_plan
+
+pkg_id, price_id = get_plan("NVMe VPS - Standard", period="day")
+```
+
+### `get_templates()`
+
+Lists all available OS templates (Debian, Ubuntu, Fedora, etc.).
+
+```python
+from shc_pulumi import get_templates
+
+for t in get_templates():
+    print(t["name"], t["family"], t["arch"])
+```
+
+### `get_machine_types()`
+
+Lists all VPS plans with CPU, RAM, disk, and daily pricing.
+
+```python
+from shc_pulumi import get_machine_types
+
+for m in get_machine_types():
+    print(f"{m['name']}: {m['cpu']} CPU, {m['memory_mb']} MB, ${m['price_daily']}/day")
+```
+
+## Credit Safety
+
+Before placing an order, `create()` performs a credit pre-check:
+
+1. Calls `client.estimate_daily_cost(package_id)` to get the daily price.
+2. Calls `client.get_available_credit()` to get the available USD balance.
+3. If `available < daily_cost`, raises `RuntimeError` with a link to add
+   credit -- **before** any order is submitted.
+
+```python
+RuntimeError: Insufficient credit: need $0.46, have $0.05.
+    Add credit at https://blesta.sovereignhybridcompute.com/client/
+```
+
+This check **fails open**: if the billing endpoint is unreachable (network
+error, auth failure, etc.), the pre-check is skipped and the order proceeds
+normally. This ensures transient API issues never block provisioning.
+
+The `check()` method also emits a warning (as a `CheckFailure` with property
+`"credit"`) when the balance falls below $0.10, so `pulumi preview` surfaces
+low credit before you even run `pulumi up`.
 
 ## Configuration
 

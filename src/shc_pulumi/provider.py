@@ -121,6 +121,21 @@ class SHCVMProvider(ResourceProvider):
                 )
             )
 
+        # Best-effort credit warning: fail open if endpoint unreachable.
+        try:
+            credit_client = self._get_client(news)
+            credit = credit_client.get_available_credit()
+            if credit < 0.10:
+                failures.append(
+                    CheckFailure(
+                        "credit",
+                        f"Low credit balance: ${credit:.2f}. "
+                        "VM creation may fail.",
+                    )
+                )
+        except Exception:
+            pass
+
         return CheckResult(news, failures)
 
     def create(self, props: dict[str, Any]) -> CreateResult:
@@ -128,6 +143,24 @@ class SHCVMProvider(ResourceProvider):
         hostname = props["hostname"]
         package_id = props["package_id"]
         pricing_id = props["pricing_id"]
+
+        # Credit pre-check: refuse to order if available credit is less
+        # than the estimated daily cost.  Fails open (silently continues)
+        # when the billing endpoint is unreachable so that a transient
+        # API hiccup never blocks provisioning.
+        try:
+            daily_cost = client.estimate_daily_cost(package_id)
+            available = client.get_available_credit()
+            if available < daily_cost:
+                raise RuntimeError(
+                    f"Insufficient credit: need ${daily_cost:.2f}, "
+                    f"have ${available:.2f}. Add credit at "
+                    f"https://blesta.sovereignhybridcompute.com/client/"
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass  # fail open if credit endpoint unreachable
 
         result = client.submit_order(
             hostname=hostname,

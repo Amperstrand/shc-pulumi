@@ -18,73 +18,82 @@ from shc_toolkit.client import SHCError
 # ---------------------------------------------------------------------------
 
 
-def test_check_rejects_invalid_package_id():
-    provider = SHCVMProvider(api_key="test")
-    result = provider.check({}, {"package_id": -1, "pricing_id": 245, "hostname": "vm"})
+def test_check_rejects_invalid_package_id(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check({}, {"package_id": -1, "pricing_id": 245, "hostname": "vm"})
     assert len(result.failures) == 1
     assert result.failures[0].property == "package_id"
 
 
-def test_check_rejects_zero_package_id():
-    provider = SHCVMProvider(api_key="test")
-    result = provider.check({}, {"package_id": 0, "pricing_id": 245, "hostname": "vm"})
+def test_check_rejects_zero_package_id(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check({}, {"package_id": 0, "pricing_id": 245, "hostname": "vm"})
     failures = [f for f in result.failures if f.property == "package_id"]
     assert len(failures) == 1
 
 
-def test_check_rejects_invalid_pricing_id():
-    provider = SHCVMProvider(api_key="test")
-    result = provider.check({}, {"package_id": 81, "pricing_id": -5, "hostname": "vm"})
+def test_check_rejects_invalid_pricing_id(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check({}, {"package_id": 81, "pricing_id": -5, "hostname": "vm"})
     failures = [f for f in result.failures if f.property == "pricing_id"]
     assert len(failures) == 1
 
 
-def test_check_rejects_empty_hostname():
-    provider = SHCVMProvider(api_key="test")
-    result = provider.check({}, {"package_id": 81, "pricing_id": 245, "hostname": ""})
+def test_check_rejects_empty_hostname(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check({}, {"package_id": 81, "pricing_id": 245, "hostname": ""})
     failures = [f for f in result.failures if f.property == "hostname"]
     assert len(failures) == 1
 
 
-def test_check_rejects_whitespace_hostname():
-    provider = SHCVMProvider(api_key="test")
-    result = provider.check({}, {"package_id": 81, "pricing_id": 245, "hostname": "  "})
+def test_check_rejects_whitespace_hostname(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check({}, {"package_id": 81, "pricing_id": 245, "hostname": "  "})
     failures = [f for f in result.failures if f.property == "hostname"]
     assert len(failures) == 1
 
 
-def test_check_rejects_invalid_power_state():
-    provider = SHCVMProvider(api_key="test")
-    result = provider.check(
-        {},
-        {"package_id": 81, "pricing_id": 245, "hostname": "vm", "power_state": "paused"},
-    )
+def test_check_rejects_invalid_power_state(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check(
+            {},
+            {"package_id": 81, "pricing_id": 245, "hostname": "vm", "power_state": "paused"},
+        )
     failures = [f for f in result.failures if f.property == "power_state"]
     assert len(failures) == 1
 
 
-def test_check_accepts_valid_inputs():
-    provider = SHCVMProvider(api_key="test")
-    result = provider.check(
-        {},
-        {"package_id": 81, "pricing_id": 245, "hostname": "vm", "power_state": "running"},
-    )
+def test_check_accepts_valid_inputs(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check(
+            {},
+            {"package_id": 81, "pricing_id": 245, "hostname": "vm", "power_state": "running"},
+        )
     assert len(result.failures) == 0
 
 
-def test_check_accepts_valid_stopped_power_state():
-    provider = SHCVMProvider(api_key="test")
-    result = provider.check(
-        {},
-        {"package_id": 81, "pricing_id": 245, "hostname": "vm", "power_state": "stopped"},
-    )
+def test_check_accepts_valid_stopped_power_state(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check(
+            {},
+            {"package_id": 81, "pricing_id": 245, "hostname": "vm", "power_state": "stopped"},
+        )
     assert len(result.failures) == 0
 
 
-def test_check_returns_inputs_unchanged():
-    provider = SHCVMProvider(api_key="test")
-    news = {"package_id": 81, "pricing_id": 245, "hostname": "vm"}
-    result = provider.check({}, news)
+def test_check_returns_inputs_unchanged(mock_client):
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        news = {"package_id": 81, "pricing_id": 245, "hostname": "vm"}
+        result = provider.check({}, news)
     assert result.inputs == news
 
 

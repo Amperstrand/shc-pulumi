@@ -434,3 +434,82 @@ def test_create_vm_with_nodns_import_error_skips(mock_client):
             })
     assert result.outs["fqdn"] == ""
     assert result.outs["nodns_nsec"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Credit pre-check in create()
+# ---------------------------------------------------------------------------
+
+
+def test_create_vm_checks_credit_and_raises_when_low(mock_client):
+    mock_client.get_available_credit.return_value = 0.05
+    mock_client.estimate_daily_cost.return_value = 0.46
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        with pytest.raises(RuntimeError, match="Insufficient credit"):
+            provider.create({
+                "hostname": "test",
+                "package_id": 81,
+                "pricing_id": 245,
+                "api_key": "test",
+                "auto_cancel": False,
+            })
+
+
+def test_create_vm_proceeds_when_credit_sufficient(mock_client):
+    mock_client.get_available_credit.return_value = 5.00
+    mock_client.estimate_daily_cost.return_value = 0.46
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.create({
+            "hostname": "test",
+            "package_id": 81,
+            "pricing_id": 245,
+            "api_key": "test",
+            "auto_cancel": False,
+        })
+        assert result.id == "123"
+
+
+def test_create_vm_credit_check_fails_open_on_endpoint_error(mock_client):
+    mock_client.estimate_daily_cost.side_effect = Exception("network error")
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.create({
+            "hostname": "test",
+            "package_id": 81,
+            "pricing_id": 245,
+            "api_key": "test",
+            "auto_cancel": False,
+        })
+        assert result.id == "123"
+
+
+# ---------------------------------------------------------------------------
+# Credit warning in check()
+# ---------------------------------------------------------------------------
+
+
+def test_check_warns_on_low_credit(mock_client):
+    mock_client.get_available_credit.return_value = 0.05
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check(
+            {},
+            {"package_id": 81, "pricing_id": 245, "hostname": "vm"},
+        )
+    credit_failures = [f for f in result.failures if f.property == "credit"]
+    assert len(credit_failures) == 1
+    assert "Low credit balance" in credit_failures[0].reason
+
+
+def test_check_no_credit_warning_when_sufficient(mock_client):
+    mock_client.get_available_credit.return_value = 5.00
+    with patch("shc_pulumi.provider.SHCClient", return_value=mock_client):
+        provider = SHCVMProvider(api_key="test")
+        result = provider.check(
+            {},
+            {"package_id": 81, "pricing_id": 245, "hostname": "vm"},
+        )
+    credit_failures = [f for f in result.failures if f.property == "credit"]
+    assert len(credit_failures) == 0

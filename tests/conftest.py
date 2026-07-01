@@ -113,6 +113,10 @@ def _build_mock_client() -> MagicMock:
         {"name": "ubuntu2404-cloud", "family": "ubuntu", "arch": "x86_64", "status": "active"},
     ]
 
+    # Credit / billing (used by create() pre-check and check() warning).
+    client.get_available_credit.return_value = 5.00
+    client.estimate_daily_cost.return_value = 0.46
+
     return client
 
 

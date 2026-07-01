@@ -12,17 +12,19 @@ with open(ssh_key_path) as f:
 
 vm = SHCVMResource("shc-test-vm",
     hostname="pulumi-shc-test",
-    package_id=23,
-    pricing_id=55,
+    size="standard",
     api_key=config.require_secret("shc_api_key"),
     ssh_key=ssh_pub_key,
     auto_cancel=True,
+    nodns=True,
+    nodns_zone="dns4sats.xyz",
 )
 
 pulumi.export("ip", vm.ip)
 pulumi.export("service_id", vm.service_id)
 pulumi.export("hostname", vm.hostname)
 pulumi.export("os_user", vm.os_user)
+pulumi.export("fqdn", vm.fqdn)
 
 # Create a snapshot of the VM for pre-deploy rollback.
 snapshot = SHCSnapshotResource("pre-deploy-snapshot",
