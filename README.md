@@ -8,6 +8,11 @@ API client and exposes SHC VPS instances (and their snapshots) as first-class
 Pulumi dynamic resources, so you can provision, inspect, and tear down VMs
 from your Pulumi stack.
 
+## Related Projects
+
+- [shc-toolkit](https://github.com/Amperstrand/shc-toolkit) — Python client, CLI, and provisioning toolkit for SHC
+- [terraform-provider-shc](https://github.com/Amperstrand/terraform-provider-shc) — Terraform provider for SHC
+
 ## Quick Start
 
 ```python
@@ -16,7 +21,7 @@ import pulumi
 
 vm = SHCVMResource("web",
     hostname="web",
-    size="standard",
+    size="nvme-2c-8gb",
     api_key=pulumi.Config().require_secret("shc_api_key"),
 )
 pulumi.export("ip", vm.ip)
@@ -29,7 +34,7 @@ pulumi up
 
 ## Features
 
-- **Size abstraction** -- use `size="standard"` instead of raw package/pricing
+- **Size abstraction** -- use `size="nvme-2c-8gb"` instead of raw package/pricing
   IDs. The provider resolves the correct SHC package automatically. Changing
   `size` triggers an in-place upgrade (not a destroy/recreate).
 - **VM lifecycle** -- create, read, delete, and diff SHC virtual machines with
@@ -96,11 +101,11 @@ You also need the Pulumi CLI and a Python 3.11+ runtime for your stack.
    import pulumi
    from shc_pulumi import SHCVMResource
 
-   vm = SHCVMResource("my-vm",
-       hostname="pulumi-test",
-       size="standard",
-       api_key=pulumi.Config().require_secret("shc_api_key"),
-   )
+    vm = SHCVMResource("my-vm",
+        hostname="pulumi-test",
+        size="nvme-2c-8gb",
+        api_key=pulumi.Config().require_secret("shc_api_key"),
+    )
 
    pulumi.export("ip", vm.ip)
    pulumi.export("service_id", vm.service_id)
@@ -129,7 +134,7 @@ A Pulumi dynamic resource representing a single SHC VPS instance.
 | Argument      | Type                | Required | Default | Description |
 |---------------|---------------------|----------|---------|-------------|
 | `hostname`    | `pulumi.Input[str]` | yes      |         | Hostname assigned to the VM. Changing this forces replacement. |
-| `size`        | `pulumi.Input[str]` | no       | `None`  | Human-readable plan name (e.g. `standard`). Takes precedence over `package_id`/`pricing_id`. Changing this triggers an in-place upgrade. |
+| `size`        | `pulumi.Input[str]` | no       | `None`  | Human-readable plan name (e.g. `nvme-2c-8gb`). Takes precedence over `package_id`/`pricing_id`. Changing this triggers an in-place upgrade. |
 | `package_id`  | `pulumi.Input[int]` | no       | `None`  | SHC package ID (plan). Required if `size` is not set. Changing this triggers an in-place upgrade. |
 | `pricing_id`  | `pulumi.Input[int]` | no       | `None`  | SHC pricing option ID for the chosen package. Required if `size` is not set. Changing this triggers an in-place upgrade. |
 | `api_key`     | `pulumi.Input[str]` | yes      |         | SHC API key. Pass as a Pulumi secret for safety. |
@@ -156,7 +161,7 @@ A Pulumi dynamic resource representing a single SHC VPS instance.
 ```python
 vm = SHCVMResource("web-server",
     hostname="web-01",
-    size="standard",
+    size="nvme-2c-8gb",
     api_key=pulumi.Config().require_secret("shc_api_key"),
     ssh_key=open("~/.ssh/id_rsa.pub").read().strip(),
     auto_cancel=True,
@@ -171,10 +176,10 @@ and the VM is resized after payment. Only upgrades (more CPU/RAM/disk) are
 supported.
 
 ```python
-# Upgrade from Standard to Professional -- triggers update(), not replacement
+# Upgrade from nvme-2c-8gb to nvme-4c-16gb -- triggers update(), not replacement
 vm = SHCVMResource("web",
     hostname="web-server",
-    size="professional",  # was "standard"
+    size="nvme-4c-16gb",  # was "nvme-2c-8gb"
     api_key=config.require_secret("shc_api_key"),
 )
 ```
@@ -186,13 +191,12 @@ Instead of `package_id` and `pricing_id`, use `size`:
 ```python
 vm = SHCVMResource("web",
     hostname="web",
-    size="standard",
+    size="nvme-2c-8gb",
     api_key=config.require_secret("shc_api_key"),
 )
 ```
 
-Sizes: starter, standard, professional, business, enterprise (NVMe);
-dev-starter, dev-standard, dev-professional, dev-business, dev-enterprise (Dev VPS).
+Sizes use spec-encoding: {line}-{cpu}c-{ram}gb (e.g. nvme-2c-8gb, hdd-1c-4gb, dev-4c-16gb). See `SIZE_MAP` for all options.
 
 ### NoDNS hostname
 
@@ -210,7 +214,7 @@ pip install shc-toolkit[nostr]
 ```python
 vm = SHCVMResource("web",
     hostname="web-server",
-    size="standard",
+    size="nvme-2c-8gb",
     api_key=config.require_secret("shc_api_key"),
     nodns=True,
     nodns_zone="dns4sats.xyz",
@@ -454,7 +458,7 @@ You can generate an API key from the
 
 ## Known Limitations
 
-- **Snapshots & backups not available on Dev VPS plans**: Dev VPS plans (pkg 80-84) lack the storage infrastructure for snapshots and backups. `SHCSnapshotResource` will fail with `upstream_failure` on these plans. Use NVMe/SSD/HDD VPS plans (pkg 23+) for snapshot support. All other API features (firewall, rDNS, ISO, console, metrics) work on both plan types.
+- **Snapshot/backup limit**: All VPS plans (including Dev VPS) support 1 snapshot and 1 backup concurrently. Verified working on Dev VPS via front-door E2E (2026-07-01).
 - **Limited in-place updates**: Changes to `hostname` or `ssh_key` force VM replacement (destroy + recreate). Changes to `package_id` and `pricing_id` trigger an in-place upgrade via the SHC upgrade API (queued, prorated). Changes to `auto_cancel`, `api_key`, or `power_state` update state only (`power_state` triggers an actual start/stop of the VM).
 - **rDNS FCrDNS constraint**: The hostname set via `SHCrDNSResource` must have a matching forward DNS record (A/AAAA) pointing back to the same IP. SHC enforces forward-confirmed reverse DNS (FCrDNS); the rDNS set operation will fail if the forward lookup does not resolve to the target IP.
 
@@ -464,4 +468,6 @@ MIT
 
 ---
 
-**Get SHC VPS**: [Sovereign Hybrid Compute](https://blesta.sovereignhybridcompute.com/order/forms/a/lecture-mushroom-lunar) -- bitcoin-native VPS hosting
+**Get SHC VPS**: [Sovereign Hybrid Compute](https://blesta.sovereignhybridcompute.com/order/forms/a/lecture-mushroom-lunar) — bitcoin-native VPS hosting
+
+> **Disclosure**: The SHC link above is an affiliate link. If you sign up through it, we may receive credit toward our SHC account at no extra cost to you.
