@@ -414,7 +414,7 @@ class SHCVMResource(pulumi.dynamic.Resource):
 
         vm = SHCVMResource("my-vm",
             hostname="test-vm",
-            size="standard",
+            size="nvme-2c-8gb",
             api_key=pulumi.Config().require_secret("shc_api_key"),
             ssh_key=open("~/.ssh/id_rsa.pub").read().strip(),
             auto_cancel=True,
