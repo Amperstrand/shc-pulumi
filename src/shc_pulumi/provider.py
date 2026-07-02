@@ -162,11 +162,29 @@ class SHCVMProvider(ResourceProvider):
         except Exception:
             pass  # fail open if credit endpoint unreachable
 
-        result = client.submit_order(
-            hostname=hostname,
-            package_id=package_id,
-            pricing_id=pricing_id,
-        )
+        config_options = None
+        disk_gb = props.get("disk_gb")
+        ram_mb = props.get("ram_mb")
+        cpu = props.get("cpu")
+        template = props.get("template")
+        if any(v is not None for v in (disk_gb, ram_mb, cpu, template)):
+            config_options = client.resolve_addons(
+                package_id,
+                ram_mb=ram_mb,
+                cpu=cpu,
+                disk_gb=disk_gb,
+                template=template,
+            )
+
+        order_kwargs: dict[str, Any] = {
+            "hostname": hostname,
+            "package_id": package_id,
+            "pricing_id": pricing_id,
+        }
+        if config_options:
+            order_kwargs["config_options"] = config_options
+
+        result = client.submit_order(**order_kwargs)
 
         service_ids = result.get("service_ids", [])
         service_id = (
@@ -444,6 +462,10 @@ class SHCVMResource(pulumi.dynamic.Resource):
         size: Optional[pulumi.Input[str]] = None,
         nodns: Optional[pulumi.Input[bool]] = None,
         nodns_zone: Optional[pulumi.Input[str]] = None,
+        disk_gb: Optional[pulumi.Input[int]] = None,
+        ram_mb: Optional[pulumi.Input[int]] = None,
+        cpu: Optional[pulumi.Input[int]] = None,
+        template: Optional[pulumi.Input[str]] = None,
         opts: Optional[pulumi.ResourceOptions] = None,
     ):
         if size is not None:
@@ -477,4 +499,12 @@ class SHCVMResource(pulumi.dynamic.Resource):
             props["nodns"] = nodns
         if nodns_zone is not None:
             props["nodns_zone"] = nodns_zone
+        if disk_gb is not None:
+            props["disk_gb"] = disk_gb
+        if ram_mb is not None:
+            props["ram_mb"] = ram_mb
+        if cpu is not None:
+            props["cpu"] = cpu
+        if template is not None:
+            props["template"] = template
         super().__init__(provider, name, props, opts)
