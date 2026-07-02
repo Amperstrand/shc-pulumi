@@ -79,9 +79,8 @@ jobs:
           pip install git+https://github.com/Amperstrand/shc-toolkit.git -q
           pip install -e . -q
           python3 -c "
-          import sys
           from shc_pulumi.sizes import SIZE_MAP as pulumi_map
-          from shc_toolkit.sizes import SIZE_MAP as toolkit_map
+          from shc_toolkit.sizes import SIZE_MAP as toolkit_map, _PRICING_LOOKUP
 
           print(f'Pulumi SIZE_MAP: {len(pulumi_map)} entries')
           print(f'Toolkit SIZE_MAP: {len(toolkit_map)} entries')
@@ -92,15 +91,23 @@ jobs:
               if not tk:
                   errors.append(f'{name}: in Pulumi but not in toolkit')
               elif entry['package_id'] != tk['package_id']:
-                  errors.append(f'{name}: package_id {entry[\"package_id\"]} != toolkit {tk[\"package_id\"]}')
-              elif entry.get('pricing_id') != tk.get('pricing_id') and entry.get('pricing_id'):
-                  tk_pricing = tk.get('pricing_id') or _lookup_pricing(tk['package_id'])
-                  if tk_pricing and entry['pricing_id'] != tk_pricing:
-                      errors.append(f'{name}: pricing_id mismatch')
+                  errors.append(f'{name}: pkg {entry[\"package_id\"]} != toolkit {tk[\"package_id\"]}')
+              else:
+                  tk_pricing = tk.get('pricing_id') or _PRICING_LOOKUP.get(tk['package_id'])
+                  p_pricing = entry.get('pricing_id')
+                  if tk_pricing and p_pricing and tk_pricing != p_pricing:
+                      errors.append(f'{name}: pricing {p_pricing} != toolkit {tk_pricing}')
 
           missing = set(toolkit_map) - set(pulumi_map)
           if missing:
               print(f'::warning::Toolkit has {len(missing)} sizes not in Pulumi: {sorted(missing)[:5]}...')
+
+          if errors:
+              for e in errors:
+                  print(f'::error::{e}')
+              import sys; sys.exit(1)
+          print('Size maps match ✅')
+          "
 
           if errors:
               for e in errors:
