@@ -12,7 +12,7 @@ with open(ssh_key_path) as f:
 
 vm = SHCVMResource("shc-test-vm",
     hostname="pulumi-shc-test",
-    size="standard",
+    size="nvme-2c-8gb",
     api_key=config.require_secret("shc_api_key"),
     ssh_key=ssh_pub_key,
     auto_cancel=True,
