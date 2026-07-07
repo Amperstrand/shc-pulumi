@@ -69,7 +69,7 @@ jobs:
           print(f"[1/4] Creating VM '{hostname}' (pkg {pkg_id}, pricing {pricing_id})...")
           p = SHCVMProvider()
           result = p.create({"hostname": hostname, "package_id": pkg_id,
-              "pricing_id": pricing_id, "api_key": api_key, "auto_cancel": False})
+              "pricing_id": pricing_id, "api_key": api_key, "auto_cancel": True})
           sid = result.id
           # Persist the service id + api key + base url for the always-cancel step.
           with open(os.environ["GITHUB_ENV"], "a") as f:
