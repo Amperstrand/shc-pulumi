@@ -119,24 +119,28 @@ jobs:
               print(f"  cancel error (ignored): {e}")
           PYEOF
 
-      - name: Cleanup leftover ci- VMs on failure
-        if: failure()
+      - name: Cleanup orphaned VMs
+        if: always()
         run: |
-          python3 << 'PYEOF'
-          import os, requests, json
-          api_key = os.environ.get("SHC_API_KEY", "")
-          base = "https://blesta.sovereignhybridcompute.com/user-api/v2"
-          h = {"Authorization": f"Bearer {api_key}"}
-          r = requests.get(f"{base}/vm", headers=h, timeout=15)
-          t = r.text; i = t.find("{")
-          if i > 0: t = t[i:]
-          vms = json.loads(t).get("data",{}).get("items",[])
+          pip install -q git+https://github.com/Amperstrand/shc-toolkit.git
+          python3 -c "
+          from shc_toolkit.client import SHCClient
+          import time
+          c = SHCClient()
+          vms = c.list_vms()
+          CI_PATTERNS = ['ci-', 'pytest', 'test', 'shc-runner-', 'debug-', 'e2e-host-', 'europa-test-', 'pool-host-', 'europa-isp-', 'europa-mptcp-']
           for vm in vms:
-              if "ci-" in vm.get("hostname",""):
-                  sid = vm["id"]
-                  print(f"Cleanup: canceling leftover VM {sid} ({vm['hostname']})")
-                  try:
-                      requests.post(f"{base}/vm/{sid}/cancel",
-                          headers=h, json={"immediate": True}, timeout=15)
-                  except: pass
-          PYEOF
+              h = vm.get('hostname', '').lower()
+              if any(p in h for p in CI_PATTERNS):
+                  sid = vm['id']
+                  print(f'CLEANUP: Canceling {sid} ({vm[\"hostname\"]})')
+                  for attempt in range(3):
+                      try:
+                          c.cancel_vm(sid, immediate=True)
+                          break
+                      except Exception as e:
+                          if 'locked' in str(e).lower() and attempt < 2:
+                              time.sleep(20)
+                          else:
+                              print(f'  error: {e}')
+          "
