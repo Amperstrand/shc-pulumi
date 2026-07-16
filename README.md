@@ -4,8 +4,8 @@
 > passing) but is no longer actively developed. For new projects, use the
 > [Terraform Bridge](https://github.com/Amperstrand/shc-pulumi/blob/main/MIGRATION-TO-BRIDGE.md)
 > instead — it auto-syncs with terraform-provider-shc and requires zero
-> maintenance. This repo is kept for the `nodns=True` feature (NoDNS
-> integration) which the TF bridge doesn't support.
+> maintenance. NoDNS can be handled outside Pulumi via the CLI:
+> `shc nodns --ip <vm-ip>`.
 
 Pulumi dynamic provider for Sovereign Hybrid Compute (SHC) VPS. Manage SHC
 virtual machines as Pulumi infrastructure-as-code.
