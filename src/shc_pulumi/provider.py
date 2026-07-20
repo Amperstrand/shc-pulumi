@@ -24,7 +24,7 @@ from .sizes import resolve_size
 
 logger = logging.getLogger(__name__)
 
-_PROVISIONING_TIMEOUT = 600
+_PROVISIONING_TIMEOUT = 900
 _PROVISIONING_INTERVAL = 5
 
 # Changes to these props force a full replacement (delete + recreate).

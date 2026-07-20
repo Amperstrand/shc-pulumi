@@ -14,10 +14,9 @@ jobs:
   integration:
     name: Provider VM lifecycle (create + cancel)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
-      # NVMe Starter (pkg 23, pricing 55) -- cheapest plan that supports
-      # snapshots. ~$0.26/day with prorated refund on immediate cancel.
       SHC_PKG_ID: "81"
       SHC_PRICING_ID: "245"
     steps:
@@ -67,11 +66,11 @@ jobs:
           pkg_id = int(os.environ["SHC_PKG_ID"])
           pricing_id = int(os.environ["SHC_PRICING_ID"])
           print(f"[1/4] Creating VM '{hostname}' (pkg {pkg_id}, pricing {pricing_id})...")
+          print(f"      Provisioning can take up to 15 minutes on SHC...")
           p = SHCVMProvider()
           result = p.create({"hostname": hostname, "package_id": pkg_id,
               "pricing_id": pricing_id, "api_key": api_key, "auto_cancel": True})
           sid = result.id
-          # Persist the service id + api key + base url for the always-cancel step.
           with open(os.environ["GITHUB_ENV"], "a") as f:
               f.write(f"SHC_CREATED_SID={sid}\n")
               f.write(f"SHC_HOSTNAME={hostname}\n")
@@ -93,7 +92,7 @@ jobs:
           time.sleep(5)
           after = get_balance()
           cost = before - after
-          print(f"\nCI run cost: ${cost:.2f} (balance delta only, total hidden)")
+          print(f"\nCI run cost: ${cost:.2f}")
           if cost > 1.0:
               print("WARNING: cost above $1 -- check for leftover VMs")
           PYEOF
@@ -110,7 +109,7 @@ jobs:
               print("No VM was created; nothing to cancel.")
               raise SystemExit(0)
           h = {"Authorization": f"Bearer {api_key}"}
-          print(f"Always-cancel: canceling VM {sid} (hostname={os.environ.get('SHC_HOSTNAME','?')})")
+          print(f"Always-cancel: canceling VM {sid}")
           try:
               r = requests.post(f"{base}/vm/{sid}/cancel",
                   headers=h, json={"immediate": True}, timeout=15)
@@ -124,23 +123,11 @@ jobs:
         run: |
           pip install -q git+https://github.com/Amperstrand/shc-toolkit.git
           python3 -c "
+          import os
           from shc_toolkit.client import SHCClient
-          import time
-          c = SHCClient()
-          vms = c.list_vms()
-          CI_PATTERNS = ['ci-', 'pytest', 'test', 'shc-runner-', 'debug-', 'e2e-host-', 'europa-test-', 'pool-host-', 'europa-isp-', 'europa-mptcp-']
-          for vm in vms:
-              h = vm.get('hostname', '').lower()
-              if any(p in h for p in CI_PATTERNS):
-                  sid = vm['id']
-                  print(f'CLEANUP: Canceling {sid} ({vm[\"hostname\"]})')
-                  for attempt in range(3):
-                      try:
-                          c.cancel_vm(sid, immediate=True)
-                          break
-                      except Exception as e:
-                          if 'locked' in str(e).lower() and attempt < 2:
-                              time.sleep(20)
-                          else:
-                              print(f'  error: {e}')
+          c = SHCClient(api_key=os.environ['SHC_API_KEY'])
+          orphans = c.reap_orphans(max_age_hours=0.0, dry_run=False)
+          print(f'Cleanup: reaped {len(orphans)} orphan(s)')
+          for o in orphans:
+              print(f'  {o[\"hostname\"]} (ID={o[\"id\"]})')
           "
