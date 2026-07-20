@@ -32,3 +32,19 @@ If provisioning exceeds this, check SHC service status.
 ## Downstream Projects
 - physical-router-test-automation: uses shc-pulumi via cloud_lab
 - tollgate-lab: uses shc-toolkit (which shc-pulumi depends on)
+## Critical Lessons
+
+### provisioning_state never becomes "ready"
+SHC VMs report `provisioning_state: "provisioning"` forever. The `_wait_for_ready` method must check `service_status == "active"` AND `ips` non-empty — NOT `provisioning_state == "ready"`.
+
+**Evidence**: europa-vpn-vps (production, 17 days running) still reports provisioning_state="provisioning".
+
+### CI timeout + reap_orphans safety net
+Integration test creates real VMs. Always pair with:
+1. `if: always()` cleanup step
+2. `reap_orphans()` from shc-toolkit
+3. Hourly reaper GitHub Actions workflow on shc-toolkit
+
+### SHC VM hostname prefixes for test detection
+The reaper matches these prefixes: `tf-acc-`, `tollgate-`, `test-`, `ci-`, `tg-`, `zone-test-`.
+Never name a production VM with these prefixes.
