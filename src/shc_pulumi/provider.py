@@ -404,13 +404,24 @@ class SHCVMProvider(ResourceProvider):
 
     @staticmethod
     def _wait_for_ready(client: SHCClient, sid: int) -> dict[str, Any]:
+        """Poll until VM is active with an assigned IP.
+
+        SHC's provisioning_state may NEVER transition to "ready" —
+        even long-running production VMs report "provisioning".
+        Instead, we check service_status == "active" and IP assignment,
+        which matches shc-toolkit's wait_for_provisioning() logic.
+        """
         deadline = time.time() + _PROVISIONING_TIMEOUT
         while time.time() < deadline:
             try:
                 vm = client.get_vm(sid)
+                svc = vm.get("service_status", "unknown")
                 prov = vm.get("provisioning_state", "unknown")
-                if prov == "ready":
+                ips = vm.get("ips", [])
+
+                if svc == "active" and ips:
                     return vm
+
                 if prov in ("failed", "error"):
                     raise RuntimeError(f"VM {sid} provisioning failed: {vm}")
             except RuntimeError:
@@ -421,7 +432,8 @@ class SHCVMProvider(ResourceProvider):
                 )
             time.sleep(_PROVISIONING_INTERVAL)
         raise TimeoutError(
-            f"VM {sid} not ready after {_PROVISIONING_TIMEOUT}s"
+            f"VM {sid} not ready after {_PROVISIONING_TIMEOUT}s "
+            f"(service_status={svc}, provisioning_state={prov})"
         )
 
 
