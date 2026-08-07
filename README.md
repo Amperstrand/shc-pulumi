@@ -1,11 +1,23 @@
-# SHC Pulumi Provider
+# SHC Pulumi Provider — DEPRECATED
 
-> **⚠️ Maintenance mode**: This native Python provider still works (95 tests
-> passing) but is no longer actively developed. For new projects, use the
-> [Terraform Bridge](https://github.com/Amperstrand/shc-pulumi/blob/main/MIGRATION-TO-BRIDGE.md)
-> instead — it auto-syncs with terraform-provider-shc and requires zero
-> maintenance. NoDNS can be handled outside Pulumi via the CLI:
-> `shc nodns --ip <vm-ip>`.
+> **⛔ DEPRECATED (2026-08-07):** This native Python provider is archived.
+> The Pulumi ↔ Terraform Bridge path has been **verified end-to-end** (VM
+> created in 50s, destroyed in 5s, full lifecycle proven).
+>
+> **Migrate to:** [terraform-provider-shc](https://github.com/Amperstrand/terraform-provider-shc)
+> v0.2.0+ via Pulumi's "Any Terraform Provider" feature.
+> See the **[Migration Guide](MIGRATION-TO-BRIDGE.md)** for step-by-step
+> instructions.
+>
+> **Why archived?**
+> - The TF Bridge auto-syncs with terraform-provider-shc — zero Pulumi-specific
+>   maintenance
+> - The TF provider has more features (HTTP retry, input validators,
+>   Idempotency-Key, acceptance-tested CRUD)
+> - This repo's 95 mocked unit tests never tested against the real API; the TF
+>   provider's acceptance tests create and destroy real VMs
+> - NoDNS removed from the TF provider (it belongs at a provisioning layer
+>   above IaC, not inside it)
 
 Pulumi dynamic provider for Sovereign Hybrid Compute (SHC) VPS. Manage SHC
 virtual machines as Pulumi infrastructure-as-code.
